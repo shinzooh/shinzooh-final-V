@@ -1,0 +1,9 @@
+[phases.setup]
+cmds = ['apt-get update', 'apt-get install -y gcc']
+
+[phases.install]
+cmds = ['python -m venv /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt']
+paths = ["/opt/venv/bin"]
+
+[start]
+cmd = "gunicorn -w 2 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT --log-level debug --timeout 60"

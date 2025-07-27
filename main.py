@@ -83,7 +83,3 @@ async def webhook(request: Request):
         logger.error("=== [ERROR] === %s", str(e))
         await send_discord_message(f"❌ ERROR في السيرفر: {str(e)}")
         return JSONResponse({"error": str(e)}, status_code=500)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv('PORT', 8080)))

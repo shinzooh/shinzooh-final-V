@@ -3,3 +3,4 @@ uvicorn[standard]
 httpx
 python-dotenv
 pydantic
+deep_translator==1.11.4

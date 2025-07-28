@@ -43,4 +43,18 @@ async def webhook(request: Request, data: TradingViewData):
         logger.debug(f"Received webhook: {data}")
         
         # Prepare prompt for xAI API
-        prompt = f"Analyze the following
+        prompt = f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe: {data.data}. Provide a professional technical analysis and trading recommendation."
+        
+        # xAI API request headers and payload
+        headers = {
+            "Authorization": f"Bearer {XAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "grok-4-0709",  # Use "grok-beta" if needed
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,  # تصحيح من false إلى False
+            "temperature": 0
+        }
+        
+        # Call xAI API

@@ -42,19 +42,43 @@ async def webhook(request: Request, data: TradingViewData):
     try:
         logger.debug(f"Received webhook: {data}")
         
-        # Prepare and send simple test message to Telegram
+        # 1. حضّر البرومبت xAI
+        prompt = f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe: {data.data}. Provide a professional technical analysis and trading recommendation."
+        
+        headers = {
+            "Authorization": f"Bearer {XAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "grok-4-0709",
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "temperature": 0
+        }
+        
+        # 2. استدعي xAI API
+        async with httpx.AsyncClient() as client:
+            response = await client.post("https://api.x.ai/v1/chat/completions", headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+        
+        analysis = response.json()["choices"][0]["message"]["content"][:1900].strip()
+        if not analysis:
+            analysis = "No analysis available from xAI."
+        analysis = ''.join(c for c in analysis if c.isprintable())
+        
+        # 3. حضّر رسالة التليجرام
         telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         telegram_payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": "Test from API"
+            "text": f"{data.symbol} ({data.frame}) Analysis\n{data.data}\n\nRecommendation:\n{analysis}"
         }
         
         async with httpx.AsyncClient() as client:
             telegram_response = await client.post(telegram_url, json=telegram_payload)
             telegram_response.raise_for_status()
         
-        logger.info("Test message sent to Telegram successfully")
-        return {"message": "Test webhook received and processed", "status": "ok"}
+        logger.info("Analysis sent to Telegram successfully")
+        return {"message": "Analysis webhook received and processed", "status": "ok"}
     
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error: {e}")

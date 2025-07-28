@@ -42,5 +42,32 @@ async def webhook(request: Request, data: TradingViewData):
     try:
         logger.debug(f"Received webhook: {data}")
         
-        # Prepare prompt for xAI API
-        prompt = f"Analyze the following
+        # Prepare and send simple test message to Telegram
+        telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        telegram_payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": "Test from API"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            telegram_response = await client.post(telegram_url, json=telegram_payload)
+            telegram_response.raise_for_status()
+        
+        logger.info("Test message sent to Telegram successfully")
+        return {"message": "Test webhook received and processed", "status": "ok"}
+    
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error: {e}")
+        return {"message": "Error processing webhook", "status": "error", "detail": str(e)}, 500
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return {"message": "Unexpected error", "status": "error", "detail": str(e)}, 500
+
+# Optional: Add startup/shutdown events for logging
+@app.on_event("startup")
+async def startup_event():
+    logger.info("FastAPI startup event triggered")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("FastAPI shutdown event triggered")

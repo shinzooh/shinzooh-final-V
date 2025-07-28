@@ -42,48 +42,19 @@ async def webhook(request: Request, data: TradingViewData):
     try:
         logger.debug(f"Received webhook: {data}")
         
-        # Prepare prompt for xAI API
-        prompt = f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe: {data.data}. Provide a professional technical analysis and trading recommendation."
-        
-        # xAI API request headers and payload
-        headers = {
-            "Authorization": f"Bearer {XAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "grok-4-0709",  # Use "grok-beta" if needed
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-            "temperature": 0
-        }
-        
-        # Call xAI API
-        async with httpx.AsyncClient() as client:
-            response = await client.post("https://api.x.ai/v1/chat/completions", headers=headers, json=payload, timeout=60)
-            response.raise_for_status()
-        
-        analysis = response.json()["choices"][0]["message"]["content"][:1900].strip()
-        if len(response.json()["choices"][0]["message"]["content"]) > 1900:
-            logger.warning("Analysis truncated due to Telegram limit")
-        if not analysis or not analysis.strip():
-            logger.warning("Analysis is empty or invalid, using default message")
-            analysis = "No analysis available from xAI."
-        analysis = ''.join(c for c in analysis if c.isprintable())  # Keep only printable chars
-        logger.debug(f"Cleaned analysis: {analysis}")
-        
-        # Prepare and send message to Telegram
+        # Prepare and send simple test message to Telegram
         telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         telegram_payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": f"{data.symbol} ({data.frame}) Analysis\n{data.data}\n\nRecommendation:\n{analysis}"
+            "text": "Test from API"
         }
         
         async with httpx.AsyncClient() as client:
             telegram_response = await client.post(telegram_url, json=telegram_payload)
             telegram_response.raise_for_status()
         
-        logger.info("Message sent to Telegram successfully")
-        return {"message": "Webhook received and processed", "status": "ok"}
+        logger.info("Test message sent to Telegram successfully")
+        return {"message": "Test webhook received and processed", "status": "ok"}
     
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error: {e}")

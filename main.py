@@ -17,9 +17,15 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 logger = logging.getLogger(__name__)
 
 # Get environment variables
+<<<<<<< HEAD
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+=======
+XAI_API_KEY = os.getenv("XAI_API_KEY")  # API Key for xAI
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Telegram Bot Token
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Telegram Chat ID
+>>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
 
 # Validate environment variables
 if not XAI_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -29,7 +35,7 @@ if not XAI_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
 # Pydantic model for TradingView data
 class TradingViewData(BaseModel):
     symbol: str
-    frame: str  # Supports '5m', '15m', '1h', '4h', '1d'
+    frame: str  # Supports 5m, 15m, 1h, 4h, 1d, or any custom frame
     data: str
 
 # Root endpoint to confirm API is running
@@ -43,8 +49,22 @@ async def webhook(request: Request, data: TradingViewData):
     try:
         logger.debug(f"Received webhook: {data}")
 
+<<<<<<< HEAD
         # 1. تحليل xAI مع دعم الفريمات
         prompt = f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe (one of 5m, 15m, 1h, 4h, 1d): {data.data}. Provide a professional technical analysis and trading recommendation."
+=======
+        # Prompt for xAI analysis with ICT-SMC, MA, RSI, MACD
+        prompt = (
+            f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe (valid frames: 5m, 15m, 1h, 4h, 1d, or any custom frame): {data.data}\n\n"
+            "Provide a professional technical analysis and trading recommendation based on:\n"
+            "- ICT (Inner Circle Trader) and SMC (Smart Money Concepts) methodology (order blocks, liquidity zones, market structure)\n"
+            "- Moving Averages (MA)\n"
+            "- RSI (Relative Strength Index)\n"
+            "- MACD (Moving Average Convergence Divergence)\n"
+            "Summarize with trade direction, potential entry/exit levels, and any special risk notes. Be clear, brief, and actionable."
+        )
+
+>>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
         headers = {
             "Authorization": f"Bearer {XAI_API_KEY}",
             "Content-Type": "application/json"
@@ -65,13 +85,21 @@ async def webhook(request: Request, data: TradingViewData):
         if not analysis_xai:
             analysis_xai = "No analysis available from xAI."
 
+<<<<<<< HEAD
         # 2. ترجمة التحليل للعربي
+=======
+        # Translate to Arabic
+>>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
         try:
             analysis_ar_xai = GoogleTranslator(source='en', target='ar').translate(analysis_xai)
         except Exception:
             analysis_ar_xai = "تعذر الترجمة لـ xAI."
 
+<<<<<<< HEAD
         # 3. إعداد الرسائل (قسم لعربي وإنجليزي)
+=======
+        # Prepare dual messages (Arabic and English)
+>>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
         text_ar = f"🇸🇦 التحليل لـ {data.symbol} ({data.frame}):\n{data.data}\n\n{analysis_ar_xai}"
         text_en = f"🇬🇧 Analysis for {data.symbol} ({data.frame}):\n{data.data}\n\n{analysis_xai}"
         if len(text_ar) > 4000: text_ar = text_ar[:4000] + "\n\n[...truncated...]"
@@ -82,8 +110,13 @@ async def webhook(request: Request, data: TradingViewData):
             await client.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text_ar})
             await client.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text_en})
 
+<<<<<<< HEAD
         logger.info("Dual language messages with xAI sent to Telegram successfully")
         return {"message": "Dual language webhook with xAI received and processed", "status": "ok"}
+=======
+        logger.info("Dual language messages with xAI (ICT-SMC+MA+RSI+MACD) sent to Telegram successfully")
+        return {"message": "Dual language webhook with xAI (ICT-SMC+MA+RSI+MACD) received and processed", "status": "ok"}
+>>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
 
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error: {e}")
@@ -100,3 +133,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("FastAPI shutdown event triggered")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

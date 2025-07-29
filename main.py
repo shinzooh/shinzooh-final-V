@@ -5,10 +5,6 @@ from pydantic import BaseModel
 import httpx
 from dotenv import load_dotenv
 from deep_translator import GoogleTranslator
-import schedule
-import time
-import asyncio
-from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -21,9 +17,9 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 logger = logging.getLogger(__name__)
 
 # Get environment variables
-XAI_API_KEY = os.getenv("XAI_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+XAI_API_KEY = os.getenv("XAI_API_KEY")  # API Key for xAI
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Telegram Bot Token
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Telegram Chat ID
 
 # Validate environment variables
 if not XAI_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -33,7 +29,7 @@ if not XAI_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
 # Pydantic model for TradingView data
 class TradingViewData(BaseModel):
     symbol: str
-    frame: str  # Supports '5m', '15m', '1h', '4h', '1d', or any custom frame
+    frame: str  # Supports 5m, 15m, 1h, 4h, 1d, or any custom frame
     data: str
 
 # Root endpoint to confirm API is running
@@ -41,18 +37,13 @@ class TradingViewData(BaseModel):
 async def root():
     return {"message": "Shinzooh API جاهز", "status": "ok"}
 
-# Scheduled analysis function
-async def send_scheduled_analysis():
-    sample_data = TradingViewData(symbol="XAUUSD", frame="1h", data="Open: 3390, High: 3397, Low: 3387, Close: 3394")
-    await webhook(None, sample_data)
-
 # Webhook endpoint to process TradingView data
 @app.post("/webhook")
 async def webhook(request: Request, data: TradingViewData):
     try:
         logger.debug(f"Received webhook: {data}")
 
-        # 1. تحليل xAI مع ICT-SMC + MA + RSI + MACD
+        # Prompt for xAI analysis with ICT-SMC, MA, RSI, MACD
         prompt = (
             f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe (valid frames: 5m, 15m, 1h, 4h, 1d, or any custom frame): {data.data}\n\n"
             "Provide a professional technical analysis and trading recommendation based on:\n"
@@ -70,7 +61,7 @@ async def webhook(request: Request, data: TradingViewData):
         payload = {
             "model": "grok-4-0709",
             "messages": [{"role": "user", "content": prompt}],
-            "stream": false,
+            "stream": False,
             "temperature": 0
         }
         
@@ -83,13 +74,13 @@ async def webhook(request: Request, data: TradingViewData):
         if not analysis_xai:
             analysis_xai = "No analysis available from xAI."
 
-        # 2. ترجمة التحليل للعربي
+        # Translate to Arabic
         try:
             analysis_ar_xai = GoogleTranslator(source='en', target='ar').translate(analysis_xai)
         except Exception:
             analysis_ar_xai = "تعذر الترجمة لـ xAI."
 
-        # 3. إعداد الرسائل (قسم لعربي وإنجليزي)
+        # Prepare dual messages (Arabic and English)
         text_ar = f"🇸🇦 التحليل لـ {data.symbol} ({data.frame}):\n{data.data}\n\n{analysis_ar_xai}"
         text_en = f"🇬🇧 Analysis for {data.symbol} ({data.frame}):\n{data.data}\n\n{analysis_xai}"
         if len(text_ar) > 4000: text_ar = text_ar[:4000] + "\n\n[...truncated...]"
@@ -110,26 +101,6 @@ async def webhook(request: Request, data: TradingViewData):
         logger.error(f"Unexpected error: {e}")
         return {"message": "Unexpected error", "status": "error", "detail": str(e)}, 500
 
-# Schedule automatic analysis (Kuwait time: +03:00)
-def run_scheduler():
-    # Schedule for Kuwait time (UTC+03:00)
-    schedule.every().day.at("06:00").do(lambda: asyncio.run(send_scheduled_analysis()))  # 9:00 AM KWT
-    schedule.every().day.at("09:00").do(lambda: asyncio.run(send_scheduled_analysis()))  # 12:00 PM KWT
-    schedule.every().day.at("13:30").do(lambda: asyncio.run(send_scheduled_analysis()))  # 4:30 PM KWT
-    schedule.every().day.at("01:30").do(lambda: asyncio.run(send_scheduled_analysis()))  # 4:30 AM KWT
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
-# Start the scheduler in a separate thread
-import threading
-if __name__ == "__main__":
-    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-    scheduler_thread.start()
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
 # Optional: Add startup/shutdown events for logging
 @app.on_event("startup")
 async def startup_event():
@@ -138,3 +109,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("FastAPI shutdown event triggered")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

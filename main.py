@@ -5,6 +5,10 @@ from pydantic import BaseModel
 import httpx
 from dotenv import load_dotenv
 from deep_translator import GoogleTranslator
+import schedule
+import time
+import asyncio
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -29,7 +33,7 @@ if not XAI_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
 # Pydantic model for TradingView data
 class TradingViewData(BaseModel):
     symbol: str
-    frame: str  # Supports '5m', '15m', '1h', '4h', '1d'
+    frame: str  # Supports '5m', '15m', '1h', '4h', '1d', or any custom frame
     data: str
 
 # Root endpoint to confirm API is running
@@ -37,14 +41,28 @@ class TradingViewData(BaseModel):
 async def root():
     return {"message": "Shinzooh API جاهز", "status": "ok"}
 
+# Scheduled analysis function
+async def send_scheduled_analysis():
+    sample_data = TradingViewData(symbol="XAUUSD", frame="1h", data="Open: 3390, High: 3397, Low: 3387, Close: 3394")
+    await webhook(None, sample_data)
+
 # Webhook endpoint to process TradingView data
 @app.post("/webhook")
 async def webhook(request: Request, data: TradingViewData):
     try:
         logger.debug(f"Received webhook: {data}")
 
-        # 1. تحليل xAI مع دعم الفريمات
-        prompt = f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe (one of 5m, 15m, 1h, 4h, 1d): {data.data}. Provide a professional technical analysis and trading recommendation."
+        # 1. تحليل xAI مع ICT-SMC + MA + RSI + MACD
+        prompt = (
+            f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe (valid frames: 5m, 15m, 1h, 4h, 1d, or any custom frame): {data.data}\n\n"
+            "Provide a professional technical analysis and trading recommendation based on:\n"
+            "- ICT (Inner Circle Trader) and SMC (Smart Money Concepts) methodology (order blocks, liquidity zones, market structure)\n"
+            "- Moving Averages (MA)\n"
+            "- RSI (Relative Strength Index)\n"
+            "- MACD (Moving Average Convergence Divergence)\n"
+            "Summarize with trade direction, potential entry/exit levels, and any special risk notes. Be clear, brief, and actionable."
+        )
+
         headers = {
             "Authorization": f"Bearer {XAI_API_KEY}",
             "Content-Type": "application/json"
@@ -52,7 +70,7 @@ async def webhook(request: Request, data: TradingViewData):
         payload = {
             "model": "grok-4-0709",
             "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
+            "stream": false,
             "temperature": 0
         }
         
@@ -82,8 +100,8 @@ async def webhook(request: Request, data: TradingViewData):
             await client.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text_ar})
             await client.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text_en})
 
-        logger.info("Dual language messages with xAI sent to Telegram successfully")
-        return {"message": "Dual language webhook with xAI received and processed", "status": "ok"}
+        logger.info("Dual language messages with xAI (ICT-SMC+MA+RSI+MACD) sent to Telegram successfully")
+        return {"message": "Dual language webhook with xAI (ICT-SMC+MA+RSI+MACD) received and processed", "status": "ok"}
 
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error: {e}")
@@ -91,6 +109,26 @@ async def webhook(request: Request, data: TradingViewData):
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         return {"message": "Unexpected error", "status": "error", "detail": str(e)}, 500
+
+# Schedule automatic analysis (Kuwait time: +03:00)
+def run_scheduler():
+    # Schedule for Kuwait time (UTC+03:00)
+    schedule.every().day.at("06:00").do(lambda: asyncio.run(send_scheduled_analysis()))  # 9:00 AM KWT
+    schedule.every().day.at("09:00").do(lambda: asyncio.run(send_scheduled_analysis()))  # 12:00 PM KWT
+    schedule.every().day.at("13:30").do(lambda: asyncio.run(send_scheduled_analysis()))  # 4:30 PM KWT
+    schedule.every().day.at("01:30").do(lambda: asyncio.run(send_scheduled_analysis()))  # 4:30 AM KWT
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+# Start the scheduler in a separate thread
+import threading
+if __name__ == "__main__":
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 # Optional: Add startup/shutdown events for logging
 @app.on_event("startup")

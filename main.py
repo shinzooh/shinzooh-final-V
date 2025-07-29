@@ -18,13 +18,12 @@ logger = logging.getLogger(__name__)
 
 # Get environment variables
 XAI_API_KEY = os.getenv("XAI_API_KEY")
-TRADEGPT_API_KEY = os.getenv("TRADEGPT_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Validate environment variables
-if not XAI_API_KEY or not TRADEGPT_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-    logger.error("Missing env vars: XAI_API_KEY or TRADEGPT_API_KEY or TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
+if not XAI_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    logger.error("Missing env vars: XAI_API_KEY or TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
     raise ValueError("Missing required env vars")
 
 # Pydantic model for TradingView data
@@ -38,30 +37,13 @@ class TradingViewData(BaseModel):
 async def root():
     return {"message": "Shinzooh API جاهز", "status": "ok"}
 
-# Function to analyze with TradeGPT (corrected to async)
-async def analyze_with_tradegpt(symbol, frame, data):
-    try:
-        payload = {
-            'symbol': symbol,
-            'timeframe': frame,
-            'data': data,
-            'apikey': TRADEGPT_API_KEY
-        }
-        async with httpx.AsyncClient() as client:
-            response = await client.post("https://api.tradegpt.ai/analyze", json=payload, timeout=60)
-            response.raise_for_status()
-        return response.json().get('analysis', "No analysis from TradeGPT")
-    except httpx.HTTPStatusError as e:
-        logger.error(f"TradeGPT API error: {e}")
-        return "TradeGPT analysis unavailable"
-
 # Webhook endpoint to process TradingView data
 @app.post("/webhook")
 async def webhook(request: Request, data: TradingViewData):
     try:
         logger.debug(f"Received webhook: {data}")
 
-        # 1. تحليل xAI
+        # 1. تحليل xAI مع دعم الفريمات
         prompt = f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe (one of 5m, 15m, 1h, 4h, 1d): {data.data}. Provide a professional technical analysis and trading recommendation."
         headers = {
             "Authorization": f"Bearer {XAI_API_KEY}",
@@ -83,20 +65,15 @@ async def webhook(request: Request, data: TradingViewData):
         if not analysis_xai:
             analysis_xai = "No analysis available from xAI."
 
-        # 2. تحليل TradeGPT
-        analysis_tradegpt = await analyze_with_tradegpt(data.symbol, data.frame, data.data)
-
-        # 3. ترجمة التحليلات للعربي
+        # 2. ترجمة التحليل للعربي
         try:
             analysis_ar_xai = GoogleTranslator(source='en', target='ar').translate(analysis_xai)
-            analysis_ar_tradegpt = GoogleTranslator(source='en', target='ar').translate(analysis_tradegpt)
         except Exception:
             analysis_ar_xai = "تعذر الترجمة لـ xAI."
-            analysis_ar_tradegpt = "تعذر الترجمة لـ TradeGPT."
 
-        # 4. إعداد الرسائل (قسم لعربي وإنجليزي)
-        text_ar = f"🇸🇦 التحليل لـ {data.symbol} ({data.frame}):\n{data.data}\n\nxAI: {analysis_ar_xai}\nTradeGPT: {analysis_ar_tradegpt}"
-        text_en = f"🇬🇧 Analysis for {data.symbol} ({data.frame}):\n{data.data}\n\nxAI: {analysis_xai}\nTradeGPT: {analysis_tradegpt}"
+        # 3. إعداد الرسائل (قسم لعربي وإنجليزي)
+        text_ar = f"🇸🇦 التحليل لـ {data.symbol} ({data.frame}):\n{data.data}\n\n{analysis_ar_xai}"
+        text_en = f"🇬🇧 Analysis for {data.symbol} ({data.frame}):\n{data.data}\n\n{analysis_xai}"
         if len(text_ar) > 4000: text_ar = text_ar[:4000] + "\n\n[...truncated...]"
         if len(text_en) > 4000: text_en = text_en[:4000] + "\n\n[...truncated...]"
 
@@ -105,8 +82,8 @@ async def webhook(request: Request, data: TradingViewData):
             await client.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text_ar})
             await client.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text_en})
 
-        logger.info("Dual language messages with xAI and TradeGPT sent to Telegram successfully")
-        return {"message": "Dual language webhook with xAI and TradeGPT received and processed", "status": "ok"}
+        logger.info("Dual language messages with xAI sent to Telegram successfully")
+        return {"message": "Dual language webhook with xAI received and processed", "status": "ok"}
 
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error: {e}")

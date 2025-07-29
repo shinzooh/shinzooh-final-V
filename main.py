@@ -38,8 +38,8 @@ class TradingViewData(BaseModel):
 async def root():
     return {"message": "Shinzooh API جاهز", "status": "ok"}
 
-# Function to analyze with TradeGPT
-def analyze_with_tradegpt(symbol, frame, data):
+# Function to analyze with TradeGPT (corrected to async)
+async def analyze_with_tradegpt(symbol, frame, data):
     try:
         payload = {
             'symbol': symbol,

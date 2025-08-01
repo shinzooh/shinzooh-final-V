@@ -1,139 +1,200 @@
-import os
-import logging
-from fastapi import FastAPI, Request
-from pydantic import BaseModel
-import httpx
-from dotenv import load_dotenv
-from deep_translator import GoogleTranslator
+from flask import Flask, request
+import requests
+import json
+from datetime import datetime, timezone, timedelta
 
-# Load environment variables
-load_dotenv()
+# ============ إعدادات تليجرام ============
+TELEGRAM_BOT_TOKEN = '7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw'
+TELEGRAM_CHAT_ID = '715830182'
+# ============ إعدادات Discord ============
+DISCORD_WEBHOOK_URL = 'ضع Webhook Discord هنا (اختياري)'
+# ============ Rate Limiting للرفض ============
+REJECT_NOTIFY_LIMIT_SEC = 300  # تنبيه رفض كل 5 دقائق
+last_reject_notify = {'ts': datetime(1970, 1, 1, tzinfo=timezone.utc)}
+# ============ قائمة الرموز والبادئات ============
+SYMBOL_PREFIXES = {
+    'XAUUSD': 'OANDA:',  # فوركس
+    'XAGUSD': 'OANDA:',
+    'EURUSD': 'OANDA:',
+    'GBPJPY': 'OANDA:',
+    'EURCHF': 'OANDA:',
+    'EURJPY': 'OANDA:',
+    'GBPUSD': 'OANDA:',
+    'USDJPY': 'OANDA:',
+    'US100': 'CASH:',    # مؤشرات
+    'US30': 'CASH:',
+    'BTCUSD': 'BINANCE:', # كريبتو
+    'ETHUSD': 'BINANCE:'
+}
+# ============ حدود الفوليوم للسيولة ============
+VOLUME_THRESHOLDS = {
+    'forex': 5000,  # للفوركس (XAUUSD, EURUSD, ...)
+    'indices': 10000, # للمؤشرات (US100, US30)
+    'crypto': 2000   # للكريبتو (BTCUSD, ETHUSD)
+}
+# =========================================
 
-# Initialize FastAPI app
-app = FastAPI()
+app = Flask(__name__)
 
-# Logging setup
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Get environment variables
-<<<<<<< HEAD
-XAI_API_KEY = os.getenv("XAI_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-=======
-XAI_API_KEY = os.getenv("XAI_API_KEY")  # API Key for xAI
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Telegram Bot Token
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Telegram Chat ID
->>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
-
-# Validate environment variables
-if not XAI_API_KEY or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-    logger.error("Missing env vars: XAI_API_KEY or TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID")
-    raise ValueError("Missing required env vars")
-
-# Pydantic model for TradingView data
-class TradingViewData(BaseModel):
-    symbol: str
-    frame: str  # Supports 5m, 15m, 1h, 4h, 1d, or any custom frame
-    data: str
-
-# Root endpoint to confirm API is running
-@app.get("/")
-async def root():
-    return {"message": "Shinzooh API جاهز", "status": "ok"}
-
-# Webhook endpoint to process TradingView data
-@app.post("/webhook")
-async def webhook(request: Request, data: TradingViewData):
+def send_telegram_message(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try:
-        logger.debug(f"Received webhook: {data}")
-
-<<<<<<< HEAD
-        # 1. تحليل xAI مع دعم الفريمات
-        prompt = f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe (one of 5m, 15m, 1h, 4h, 1d): {data.data}. Provide a professional technical analysis and trading recommendation."
-=======
-        # Prompt for xAI analysis with ICT-SMC, MA, RSI, MACD
-        prompt = (
-            f"Analyze the following trading data for {data.symbol} on {data.frame} timeframe (valid frames: 5m, 15m, 1h, 4h, 1d, or any custom frame): {data.data}\n\n"
-            "Provide a professional technical analysis and trading recommendation based on:\n"
-            "- ICT (Inner Circle Trader) and SMC (Smart Money Concepts) methodology (order blocks, liquidity zones, market structure)\n"
-            "- Moving Averages (MA)\n"
-            "- RSI (Relative Strength Index)\n"
-            "- MACD (Moving Average Convergence Divergence)\n"
-            "Summarize with trade direction, potential entry/exit levels, and any special risk notes. Be clear, brief, and actionable."
-        )
-
->>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
-        headers = {
-            "Authorization": f"Bearer {XAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "grok-4-0709",
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-            "temperature": 0
-        }
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.post("https://api.x.ai/v1/chat/completions", headers=headers, json=payload, timeout=60)
-            response.raise_for_status()
-        
-        analysis_xai = response.json()["choices"][0]["message"]["content"][:4000].strip()
-        analysis_xai = ''.join(c for c in analysis_xai if c.isprintable())
-        if not analysis_xai:
-            analysis_xai = "No analysis available from xAI."
-
-<<<<<<< HEAD
-        # 2. ترجمة التحليل للعربي
-=======
-        # Translate to Arabic
->>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
-        try:
-            analysis_ar_xai = GoogleTranslator(source='en', target='ar').translate(analysis_xai)
-        except Exception:
-            analysis_ar_xai = "تعذر الترجمة لـ xAI."
-
-<<<<<<< HEAD
-        # 3. إعداد الرسائل (قسم لعربي وإنجليزي)
-=======
-        # Prepare dual messages (Arabic and English)
->>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
-        text_ar = f"🇸🇦 التحليل لـ {data.symbol} ({data.frame}):\n{data.data}\n\n{analysis_ar_xai}"
-        text_en = f"🇬🇧 Analysis for {data.symbol} ({data.frame}):\n{data.data}\n\n{analysis_xai}"
-        if len(text_ar) > 4000: text_ar = text_ar[:4000] + "\n\n[...truncated...]"
-        if len(text_en) > 4000: text_en = text_en[:4000] + "\n\n[...truncated...]"
-
-        telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        async with httpx.AsyncClient() as client:
-            await client.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text_ar})
-            await client.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text_en})
-
-<<<<<<< HEAD
-        logger.info("Dual language messages with xAI sent to Telegram successfully")
-        return {"message": "Dual language webhook with xAI received and processed", "status": "ok"}
-=======
-        logger.info("Dual language messages with xAI (ICT-SMC+MA+RSI+MACD) sent to Telegram successfully")
-        return {"message": "Dual language webhook with xAI (ICT-SMC+MA+RSI+MACD) received and processed", "status": "ok"}
->>>>>>> e4012e3af257e0f2250af00d91292777d454a10b
-
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error: {e}")
-        return {"message": "Error processing webhook", "status": "error", "detail": str(e)}, 500
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        return {"message": "Unexpected error", "status": "error", "detail": str(e)}, 500
+        print(f"[Telegram Error] {e}")
 
-# Optional: Add startup/shutdown events for logging
-@app.on_event("startup")
-async def startup_event():
-    logger.info("FastAPI startup event triggered")
+def send_discord_message(text):
+    if DISCORD_WEBHOOK_URL:
+        try:
+            data = {"content": text}
+            response = requests.post(DISCORD_WEBHOOK_URL, json=data)
+            response.raise_for_status()
+        except Exception as e:
+            print(f"[Discord Error] {e}")
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("FastAPI shutdown event triggered")
+def notify_rejection(reason, alert_data=None):
+    now = datetime.now(timezone.utc)
+    last_time = last_reject_notify.get('ts', datetime(1970, 1, 1, tzinfo=timezone.utc))
+    if (now - last_time).total_seconds() > REJECT_NOTIFY_LIMIT_SEC:
+        msg = f"⚠️ *Alert مرفوض*: {reason}"
+        if alert_data and 'interval' in alert_data and 'time' in alert_data:
+            msg += f"\nالفريم: `{alert_data.get('interval')}`\nالوقت: `{alert_data.get('time')}`"
+        send_telegram_message(msg)
+        send_discord_message(msg)
+        last_reject_notify['ts'] = now
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.route('/webhook', methods=['POST'])
+def tradingview_webhook():
+    data = request.json
+    print(f"[DEBUG] Received Alert: {data}")
+
+    price = data.get('close')
+    open_ = data.get('open')
+    timeframe = data.get('interval')
+    timestamp = data.get('time')
+    chart_url = data.get('chart_image_url') or data.get('screenshot_url')
+    high = data.get('high')
+    low = data.get('low')
+    volume = data.get('volume')
+    ticker = data.get('ticker')
+
+    # ====== رابط TradingView إذا متوفر ======
+    tv_link = ""
+    if ticker and timeframe:
+        try:
+            tf_num = ''.join([c for c in timeframe if c.isdigit()])
+            tf_unit = ''.join([c for c in timeframe if not c.isdigit()])
+            prefix = SYMBOL_PREFIXES.get(ticker, 'OANDA:')  # افتراضي OANDA لو الرمز مو في القايمة
+            symbol = ticker if ':' in ticker else f"{prefix}{ticker}"
+            tf_final = tf_num + (tf_unit if tf_unit else "m")
+            tv_link = f"https://www.tradingview.com/chart/?symbol={symbol}&interval={tf_final}"
+        except Exception as e:
+            print(f"[DEBUG] TV Link Error: {e}")
+            tv_link = ""
+
+    # ========== فلترة صارمة ==========
+    if not price or not timeframe or not timestamp:
+        notify_rejection("بيانات ناقصة من Alert", data)
+        return json.dumps({"status": "error", "message": "بيانات ناقصة من Alert"}), 400
+
+    # ========== فلتر زمني ديناميكي ==========
+    interval_sec = 90
+    if timeframe in ["1", "1m", "5", "5m"]:
+        interval_sec = 30
+    elif timeframe in ["15", "15m"]:
+        interval_sec = 90
+    else:
+        interval_sec = 150
+
+    now = datetime.now(timezone.utc)
+    try:
+        alert_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00')) \
+            if 'T' in timestamp else datetime.utcfromtimestamp(int(timestamp)).replace(tzinfo=timezone.utc)
+    except Exception as e:
+        print(f"[DEBUG] Timestamp Error: {e}")
+        notify_rejection("تنسيق الوقت غير مفهوم", data)
+        return json.dumps({"status": "error", "message": "تنسيق الوقت غير مفهوم"}), 400
+
+    diff_sec = abs((now - alert_time).total_seconds())
+    if diff_sec > interval_sec:
+        notify_rejection(f"Alert قديم جداً ({int(diff_sec)} ثانية)", data)
+        return json.dumps({"status": "error", "message": f"Alert قديم ({int(diff_sec)} ثواني)" }), 400
+
+    # ========== تحليل الشمعة ==========
+    candle_analysis = ""
+    if open_ and price:
+        try:
+            open_f = float(open_)
+            close_f = float(price)
+            if close_f > open_f:
+                candle_analysis = "🔵 شمعة صاعدة (Bullish)"
+            elif close_f < open_f:
+                candle_analysis = "🔴 شمعة هابطة (Bearish)"
+            else:
+                candle_analysis = "⚪️ شمعة محايدة (Doji)"
+        except Exception as e:
+            print(f"[DEBUG] Candle Analysis Error: {e}")
+            candle_analysis = "❓ لم يتم تحديد اتجاه الشمعة"
+    else:
+        candle_analysis = "⚠️ لا توجد بيانات Open للتحليل"
+
+    # ========== تحليل High/Low ==========
+    proximity_analysis = ""
+    try:
+        if high and low and price:
+            high_f = float(high)
+            low_f = float(low)
+            close_f = float(price)
+            high_diff = abs(high_f - close_f) / (high_f - low_f + 1e-6)
+            low_diff = abs(close_f - low_f) / (high_f - low_f + 1e-6)
+            if high_diff <= 0.005:
+                proximity_analysis = "📈 السعر قريب جدًا من قمة الشمعة"
+            elif low_diff <= 0.005:
+                proximity_analysis = "📉 السعر قريب جدًا من قاع الشمعة"
+    except Exception as e:
+        print(f"[DEBUG] Proximity Analysis Error: {e}")
+        proximity_analysis = ""
+
+    # ========== تحليل السيولة (الفوليوم) ==========
+    liquidity_analysis = ""
+    try:
+        if volume and ticker:
+            volume_f = float(volume)
+            # تحديد نوع الأصل
+            asset_type = 'forex' if ticker in ['XAUUSD', 'XAGUSD', 'EURUSD', 'GBPJPY', 'EURCHF', 'EURJPY', 'GBPUSD', 'USDJPY'] \
+                        else 'indices' if ticker in ['US100', 'US30'] \
+                        else 'crypto' if ticker in ['BTCUSD', 'ETHUSD'] \
+                        else 'forex'  # افتراضي
+            volume_threshold = VOLUME_THRESHOLDS.get(asset_type, 5000)
+            if volume_f > volume_threshold:
+                liquidity_analysis = f"🚨 دخول سيولة قوية! ({volume_f:.0f})"
+    except Exception as e:
+        print(f"[DEBUG] Liquidity Analysis Error: {e}")
+        liquidity_analysis = ""
+
+    # ========== نص الرسالة ==========
+    analysis = f"""
+*🚀 TradingView Live Alert*
+الرمز: `{ticker if ticker else 'غير محدد'}`
+الفريم: `{timeframe}`
+السعر: `{price}`
+الوقت: `{timestamp}`
+{candle_analysis}
+{proximity_analysis if proximity_analysis else ""}
+{liquidity_analysis if liquidity_analysis else ""}
+{'[صورة الشارت](%s)' % chart_url if chart_url else '❌ لا يوجد صورة'}
+{f'[شارت TradingView]({tv_link})' if tv_link else ''}
+    """
+
+    send_telegram_message(analysis.strip())
+    send_discord_message(analysis.strip())
+
+    return json.dumps({"status": "success"}), 200
+
+if __name__ == '__main__':
+    import logging
+    logging.basicConfig(level=logging.DEBUG)
+    print("🚀 Shinzooh TradingView Webhook is running! Check /webhook endpoint.")
+    app.run(host='0.0.0.0', port=5000)

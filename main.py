@@ -59,11 +59,20 @@ def notify_rejection(reason, alert_data=None):
         send_discord_message(msg)
         last_reject_notify['ts'] = now
 
+def parse_timestamp(ts):
+    """تحاول تحويل الطابع الزمني إلى datetime. تدعم صيغ ISO مثل '2025-08-04T00:33:09Z' أو طابع يونكس (مُحول لسلسلة أو رقم)."""
+    if ts is None:
+        raise ValueError("Timestamp is None")
+    # إذا كان نص وفيه حرف 'T'، نفترض صيغة ISO
+    if isinstance(ts, str) and 'T' in ts:
+        return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+    # غير ذلك، نفترض أنه طابع يونكس
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc)
+
 @app.route('/webhook', methods=['POST'])
 def tradingview_webhook():
     try:
-        data = request.json
-        print(f"[DEBUG] Received Alert: {data}")
+        data = request.json or {}
         price = data.get('close')
         open_ = data.get('open')
         timeframe = data.get('interval')
@@ -74,11 +83,101 @@ def tradingview_webhook():
         volume = data.get('volume')
         ticker = data.get('ticker')
 
-        # التحقق من البيانات
+        # التحقق من البيانات الأساسية
         if not price or not timeframe or not timestamp:
             notify_rejection("بيانات ناقصة من Alert", data)
             return json.dumps({"status": "error", "message": "بيانات ناقصة من Alert"}), 400
 
-        # فلتر زمني
+        # فلتر زمني ديناميكي
         if timeframe in ["1", "1m", "5", "5m"]:
-            interval
+            interval_sec = 30
+        elif timeframe in ["15", "15m"]:
+            interval_sec = 90
+        else:
+            interval_sec = 150
+        now = datetime.now(timezone.utc)
+        try:
+            alert_time = parse_timestamp(timestamp)
+        except Exception:
+            notify_rejection("تنسيق الوقت غير مفهوم", data)
+            return json.dumps({"status": "error", "message": "تنسيق الوقت غير مفهوم"}), 400
+        diff_sec = abs((now - alert_time).total_seconds())
+        if diff_sec > interval_sec:
+            notify_rejection(f"Alert قديم جداً ({int(diff_sec)} ثانية)", data)
+            return json.dumps({"status": "error", "message": f"Alert قديم ({int(diff_sec)} ثواني)"}), 400
+
+        # تحليل الشمعة
+        try:
+            candle_analysis = ("🔵 شمعة صاعدة (Bullish)" if float(price) > float(open_) else
+                              "🔴 شمعة هابطة (Bearish)" if float(price) < float(open_) else
+                              "⚪️ شمعة محايدة (Doji)")
+        except Exception:
+            candle_analysis = "❓ لم يتم تحديد اتجاه الشمعة"
+
+        # تحليل قرب السعر من High/Low
+        proximity_analysis = ""
+        try:
+            if high and low and price:
+                high_f = float(high)
+                low_f = float(low)
+                close_f = float(price)
+                high_diff = abs(high_f - close_f) / (high_f - low_f + 1e-6)
+                low_diff = abs(close_f - low_f) / (high_f - low_f + 1e-6)
+                if high_diff <= 0.005:
+                    proximity_analysis = "📈 السعر قريب جدًا من قمة الشمعة"
+                elif low_diff <= 0.005:
+                    proximity_analysis = "📉 السعر قريب جدًا من قاع الشمعة"
+        except Exception:
+            pass
+
+        # تحليل الفوليوم
+        liquidity_analysis = ""
+        try:
+            if volume and ticker:
+                volume_f = float(volume)
+                asset_type = ('forex' if ticker in ['XAUUSD', 'XAGUSD', 'EURUSD', 'GBPJPY', 'EURCHF', 'EURJPY', 'GBPUSD', 'USDJPY']
+                             else 'indices' if ticker in ['US100', 'US30']
+                             else 'crypto' if ticker in ['BTCUSD', 'ETHUSD']
+                             else 'forex')
+                volume_threshold = VOLUME_THRESHOLDS.get(asset_type, 5000)
+                if volume_f > volume_threshold:
+                    liquidity_analysis = f"🚨 دخول سيولة قوية! ({volume_f:.0f})"
+        except Exception:
+            pass
+
+        # بناء رابط TradingView
+        tv_link = ""
+        if ticker and timeframe:
+            try:
+                tf_num = ''.join([c for c in timeframe if c.isdigit()])
+                tf_unit = ''.join([c for c in timeframe if not c.isdigit()])
+                tf_final = tf_num + (tf_unit if tf_unit else "m")
+                tv_link = f"https://www.tradingview.com/chart/?symbol={ticker}&interval={tf_final}"
+            except Exception:
+                pass
+
+        # نص الرسالة
+        analysis = f"""*🚀 TradingView Live Alert*
+الرمز: `{ticker}`
+الفريم: `{timeframe}`
+السعر: `{price}`
+الوقت: `{timestamp}`
+{candle_analysis}
+{proximity_analysis if proximity_analysis else ''}
+{liquidity_analysis if liquidity_analysis else ''}
+{'[صورة الشارت](%s)' % chart_url if chart_url else '❌ لا يوجد صورة'} [تأكدي من تفعيل "Include screenshot" في إعداد التنبيه]
+{('[شارت TradingView](%s)' % tv_link) if tv_link else ''}""".strip()
+
+        send_telegram_message(analysis)
+        send_discord_message(analysis)
+        return json.dumps({"status": "success"}), 200
+    except Exception as e:
+        logging.exception("Unhandled exception in webhook: %s", e)
+        notify_rejection("خطأ داخلي في الخادم", data if 'data' in locals() else None)
+        return json.dumps({"status": "error", "message": "خطأ داخلي"}), 500
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+    port = int(os.environ.get('PORT', 5000))  # قيمة افتراضية عامة
+    print("🚀 Shinzooh TradingView Webhook is running! Check /webhook endpoint.")
+    app.run(host='0.0.0.0', port=port)

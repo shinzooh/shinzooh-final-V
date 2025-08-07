@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
-    prompt = f"حلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع. كلاسيكي: EMA/MA/RSI/MACD (95%+). توصية شراء/بيع: دخول/هدف/ستوب (95%+ نجاح, max 30 نقطة انعكاس). بيانات: {data_str}"
+    prompt = f"حلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع مع ذكر مستويات. كلاسيكي: EMA/MA/RSI/MACD (95%+ ذكر أرقام). توصية شراء/بيع كاملة: ذكر إذا شراء أو بيع, دخول/هدف/ستوب (95%+ نجاح, max 30 نقطة انعكاس, ذكر نقاط دقيقة). بيانات: {data_str}"
     xai_url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
     data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 500}
@@ -27,7 +27,7 @@ def get_xai_analysis(symbol, frame, data_str):
 
 def send_to_telegram(message, image_url=None):
     start = time.time()
-    if image_url:
+    if image_url and image_url != '{{chart_image_url}}':  # تجنب غير صالح
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         try:
             img = requests.get(image_url, timeout=10).content

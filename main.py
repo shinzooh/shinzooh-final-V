@@ -85,6 +85,7 @@ def tradingview_webhook():
     try:
         # استقبال البيانات بأي صيغة
         raw_data = request.data.decode('utf-8', errors='ignore').strip()
+        logging.info(f"Raw data received: {raw_data}")  # لوجينج لتشخيص البيانات
         try:
             data = json.loads(raw_data) if raw_data else {}
         except Exception:

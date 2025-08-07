@@ -1,9 +1,10 @@
 import requests
 from flask import Flask, request, jsonify
 import json
+import os  # أضفت هذا للـ ENV
 
 # إعدادات النظام
-XAI_API_KEY = "xai-USbuWW2tAgzXmLIIJuJ3rRn4JfeSF9rYMrhHzdqsiszUyBx5g8XSa7vtrdXGSxYL0NtYnCRShGhkr31k"
+XAI_API_KEY = os.getenv("XAI_API_KEY")  # يقرأ من ENV في Render
 TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
 TELEGRAM_CHAT_ID = "715830182"
 
@@ -23,7 +24,7 @@ def get_xai_analysis(symbol, frame, data_str):
         "Content-Type": "application/json"
     }
     data = {
-        "model": "grok-4",
+        "model": "grok-4-latest",
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 1200
     }
@@ -71,7 +72,6 @@ def webhook():
     symbol = "XAUUSD"
     frame = "1H"
     data_str = body
-    # جرب parse كـ JSON أول
     try:
         payload = json.loads(body)
         parsed_type = "json"
@@ -79,7 +79,6 @@ def webhook():
         print(payload)
         print("==============================")
     except Exception:
-        # لو فشل جرب كـ key=value
         try:
             payload = dict(pair.split('=') for pair in body.split(',') if '=' in pair)
             parsed_type = "kv"
@@ -89,7 +88,6 @@ def webhook():
         except Exception as e:
             print(f"خطأ في parse payload: {str(e)}")
             payload = {}
-    # استخراج البيانات حسب نوع الـ payload
     if parsed_type == "json":
         symbol = payload.get("ticker") or payload.get("SYMB") or "XAUUSD"
         tf = payload.get("interval") or payload.get("TF") or "1H"
@@ -100,10 +98,9 @@ def webhook():
         symbol = payload.get("SYMB") or "XAUUSD"
         tf = payload.get("TF") or "1H"
         frame = tf + 'm' if tf.isdigit() else tf
-        data_str = body  # إذا فيه صورة جت key=value
+        data_str = body
         image_url = payload.get("image_url") or payload.get("snapshot_url")
     else:
-        # fallback
         symbol = "XAUUSD"
         frame = "1H"
         data_str = body

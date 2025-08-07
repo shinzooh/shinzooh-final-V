@@ -1,5 +1,6 @@
 import requests
 from flask import Flask, request, jsonify
+import json
 
 # إعدادات النظام
 XAI_API_KEY = "xai-USbuWW2tAgzXmLIIJuJ3rRn4JfeSF9rYMrhHzdqsiszUyBx5g8XSa7vtrdXGSxYL0NtYnCRShGhkr31k"
@@ -41,6 +42,7 @@ def get_xai_analysis(symbol, frame, image_url):
         res.raise_for_status()
         return res.json()["choices"][0]["message"]["content"]
     except Exception as e:
+        print(f"خطأ في xAI API: {str(e)}")
         return f"خطأ في xAI API: {str(e)}"
 
 def send_to_telegram(message, image_url):
@@ -57,16 +59,33 @@ def send_to_telegram(message, image_url):
         res.raise_for_status()
         return res.json()
     except Exception as e:
+        print(f"خطأ في إرسال تلجرام: {str(e)}")
         return f"خطأ في إرسال تلجرام: {str(e)}"
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json()
-    symbol = data.get("ticker") or "XAUUSD"  # TradingView يرسل 'ticker' كـ symbol
-    frame = data.get("interval") or "1H"    # TradingView يرسل 'interval' كـ frame
-    image_url = data.get("image_url")
+    try:
+        data = request.get_json(silent=True)
+        if not data:
+            # إذا غير JSON، جرب parse text/plain كـ JSON
+            body = request.data.decode('utf-8')
+            data = json.loads(body) if body else {}
+    except Exception as e:
+        print(f"خطأ في parse payload: {str(e)}")
+        data = {}
+    
+    print("======= Webhook Payload from TradingView =======")
+    print(data)
+    print("===============================================")
+    
+    symbol = data.get("ticker") or "XAUUSD"
+    frame = data.get("interval") or "1H"
+    image_url = data.get("image_url") or data.get("snapshot_url")  # قد يكون snapshot_url حسب الdocs
+    
     if not image_url:
+        print("❌ الصورة غير موجودة بالـ payload (image_url أو snapshot_url ناقص) ❌")
         return jsonify({"status": "error", "msg": "مطلوب image_url من TradingView"}), 400
+    
     analysis = get_xai_analysis(symbol, frame, image_url)
     send_to_telegram(f"{symbol} {frame}\n\n{analysis}", image_url)
     return jsonify({"status": "ok", "analysis": analysis})

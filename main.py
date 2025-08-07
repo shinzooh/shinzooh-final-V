@@ -1,10 +1,10 @@
 import requests
 from flask import Flask, request, jsonify
 import json
-import os  # أضفت هذا للـ ENV
+import os  # لقراءة ENV
 
 # إعدادات النظام
-XAI_API_KEY = os.getenv("XAI_API_KEY")  # يقرأ من ENV في Render
+XAI_API_KEY = os.getenv("XAI_API_KEY")  # من ENV في Render
 TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
 TELEGRAM_CHAT_ID = "715830182"
 

@@ -5,18 +5,13 @@ from datetime import datetime, timezone
 import os
 import logging
 
-# إعدادات تليجرام
 TELEGRAM_BOT_TOKEN = '7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw'
 TELEGRAM_CHAT_ID = '715830182'
-
-# إعدادات Discord
 DISCORD_WEBHOOK_URL = ''  # غيّريها لو تبين
 
-# Rate limiting
 REJECT_NOTIFY_LIMIT_SEC = 300
 last_reject_notify = {'ts': datetime(1970, 1, 1, tzinfo=timezone.utc)}
 
-# حدود السيولة
 VOLUME_THRESHOLDS = {
     'forex': 5000,
     'indices': 10000,
@@ -25,7 +20,6 @@ VOLUME_THRESHOLDS = {
 
 app = Flask(__name__)
 
-# مسار الرئيسي
 @app.route('/', methods=['GET', 'HEAD'])
 def home():
     return "Shinzooh Webhook شغالة!", 200
@@ -69,32 +63,40 @@ def parse_timestamp(ts):
     except ValueError:
         raise ValueError(f"Timestamp format not supported: {ts}")
 
+def parse_plain_kv(text):
+    d = {}
+    try:
+        for part in text.strip().split(","):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                d[k.strip().lower()] = v.strip()
+    except Exception:
+        pass
+    return d
+
 @app.route('/webhook', methods=['POST'])
 def tradingview_webhook():
     try:
-        # قراءة البيانات كنص دايمًا
-        raw_data = request.data.decode('utf-8', errors='ignore')
+        raw_data = request.data.decode('utf-8', errors='ignore').strip()
         try:
             data = json.loads(raw_data) if raw_data else {}
-        except Exception as e:
-            logging.warning(f"Invalid JSON data, treating as empty: {raw_data} - Error: {e}")
-            data = {}
+        except Exception:
+            data = parse_plain_kv(raw_data)
 
-        price = data.get('close')
-        open_ = data.get('open')
-        timeframe = data.get('interval')
-        timestamp = data.get('time')
-        chart_url = data.get('chart_image_url') or data.get('screenshot_url')
-        high = data.get('high')
-        low = data.get('low')
-        volume = data.get('volume')
-        ticker = data.get('ticker')
+        price      = data.get('close')   or data.get('c')
+        open_      = data.get('open')    or data.get('o')
+        timeframe  = data.get('interval') or data.get('tf')
+        timestamp  = data.get('time')    or data.get('t')
+        chart_url  = data.get('chart_image_url') or data.get('screenshot_url') or data.get('img') or None
+        high       = data.get('high')    or data.get('h')
+        low        = data.get('low')     or data.get('l')
+        volume     = data.get('volume')  or data.get('v')
+        ticker     = data.get('ticker')  or data.get('symb') or data.get('symbol')
 
         if not price or not timeframe or not timestamp:
             notify_rejection("بيانات ناقصة من Alert", data)
             return json.dumps({"status": "error", "message": "بيانات ناقصة من Alert"}), 400
 
-        # فلتر زمني للفريمات المطلوبة
         if timeframe in ["5", "5m"]:
             interval_sec = 300
         elif timeframe in ["15", "15m"]:
@@ -119,7 +121,6 @@ def tradingview_webhook():
             notify_rejection(f"Alert قديم جداً ({int(diff_sec)} ثانية)", data)
             return json.dumps({"status": "error", "message": f"Alert قديم ({int(diff_sec)} ثواني)"}), 400
 
-        # تحليل الشمعة
         try:
             candle_analysis = ("🔵 شمعة صاعدة (Bullish)" if float(price) > float(open_) else
                               "🔴 شمعة هابطة (Bearish)" if float(price) < float(open_) else
@@ -127,7 +128,6 @@ def tradingview_webhook():
         except Exception:
             candle_analysis = "❓ لم يتم تحديد اتجاه الشمعة"
 
-        # تحليل قرب السعر من High/Low
         proximity_analysis = ""
         try:
             if high and low and price:
@@ -143,7 +143,6 @@ def tradingview_webhook():
         except Exception:
             pass
 
-        # تحليل السيولة
         liquidity_analysis = ""
         try:
             if volume and ticker:
@@ -158,18 +157,16 @@ def tradingview_webhook():
         except Exception:
             pass
 
-        # بناء رابط TradingView
         tv_link = ""
         if ticker and timeframe:
             try:
-                tf_num = ''.join([c for c in timeframe if c.isdigit()])
-                tf_unit = ''.join([c for c in timeframe if not c.isdigit()])
+                tf_num = ''.join([c for c in str(timeframe) if c.isdigit()])
+                tf_unit = ''.join([c for c in str(timeframe) if not c.isdigit()])
                 tf_final = tf_num + (tf_unit if tf_unit else "m")
                 tv_link = f"https://www.tradingview.com/chart/?symbol={ticker}&interval={tf_final}"
             except Exception:
                 pass
 
-        # نص الرسالة
         analysis = f"""*🚀 TradingView Live Alert*
 الرمز: `{ticker}`
 الفريم: `{timeframe}`
@@ -178,7 +175,7 @@ def tradingview_webhook():
 {candle_analysis}
 {proximity_analysis if proximity_analysis else ''}
 {liquidity_analysis if liquidity_analysis else ''}
-{'[صورة الشارت](%s)' % chart_url if chart_url else '❌ لا يوجد صورة'} [تأكدي من تفعيل "Include screenshot"]
+{'[صورة الشارت](%s)' % chart_url if chart_url else '❌ لا يوجد صورة'} [تأكد من تفعيل "Include screenshot"]
 {('[شارت TradingView](%s)' % tv_link) if tv_link else ''}""".strip()
 
         send_telegram_message(analysis)
@@ -186,11 +183,11 @@ def tradingview_webhook():
         return json.dumps({"status": "success"}), 200
     except Exception as e:
         logging.exception("Unhandled exception in webhook: %s", e)
-        notify_rejection("خطأ داخلي في الخادم", data if 'data' in locals() else None)
+        notify_rejection("خطأ داخلي في الخادم", locals().get('data', None))
         return json.dumps({"status": "error", "message": "خطأ داخلي"}), 500
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
     port = int(os.environ.get('PORT', 5000))
-    print("🚀 Shinzooh Webhook is running! Check /webhook endpoint.")
+    print("🚀 Shinzooh TradingView Webhook is running! Check /webhook endpoint.")
     app.run(host='0.0.0.0', port=port)

@@ -12,10 +12,24 @@ app = Flask(__name__)
 
 def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
-    prompt = f"حلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع مع مستويات واضحة. كلاسيكي: EMA/MA/RSI/MACD (95%+, أرقام دقيقة). توصية نهائية (شراء أو بيع) مع ذكر: نقطة دخول, هدف Take Profit, ستوب Stop Loss (95%+ نجاح, max 30 نقطة انعكاس, سبب مبني على SMC/ICT والمؤشرات). تحليل مرتب نقاط واضحة. بيانات: {data_str}"
+    # Prompt إنجليزي واضح، يفرض bullet points فقط!
+    prompt = (
+        f"MANDATORY: Respond in bullet points ONLY. Analyze {symbol} on {frame} timeframe. "
+        "Give ONLY the following:\n"
+        "1. Trade type (Buy/Sell)\n"
+        "2. Entry point (exact number)\n"
+        "3. Take Profit (number)\n"
+        "4. Stop Loss (number)\n"
+        "5. Reason (1 short sentence only)\n"
+        f"Data: {data_str}"
+    )
     xai_url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
-    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 500}
+    data = {
+        "model": "grok-4-latest",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1200
+    }
     try:
         res = requests.post(xai_url, headers=headers, json=data, timeout=30)
         res.raise_for_status()
@@ -30,7 +44,10 @@ def get_xai_analysis(symbol, frame, data_str):
         return result
     except Exception as e:
         print(f"خطأ xAI: {str(e)} Time: {time.time() - start}s")
-        return "خطأ xAI: fallback - شراء {symbol} فوق الحالي, هدف +50, ستوب -30 (95%+)."
+        return (
+            f"ERROR: No response from xAI.\n"
+            f"Default: Buy {symbol} above current, TP +50, SL -30 (95%+)."
+        )
 
 def send_to_telegram(message, image_url=None):
     start = time.time()

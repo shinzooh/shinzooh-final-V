@@ -69,16 +69,15 @@ def parse_timestamp(ts):
 @app.route('/webhook', methods=['POST'])
 def tradingview_webhook():
     try:
-        # تحقق من Content-Type
-        content_type = request.headers.get('Content-Type')
-        if content_type != 'application/json':
-            logging.warning(f"Unsupported Content-Type: {content_type}")
-            notify_rejection("نوع البيانات غير مدعوم (غير JSON)", None)
-            return json.dumps({"status": "error", "message": "نوع البيانات غير مدعوم"}), 415
-
-        data = request.json
+        data = request.json or {}
         if not data:
-            data = json.loads(request.data.decode('utf-8'))  # لو request.json فشل، جرب قراءة البيانات يدوي
+            raw_data = request.data.decode('utf-8')
+            try:
+                data = json.loads(raw_data)
+            except json.JSONDecodeError:
+                logging.warning(f"Invalid JSON data: {raw_data}")
+                notify_rejection("بيانات غير صالحة (غير JSON)", None)
+                return json.dumps({"status": "error", "message": "بيانات غير صالحة"}), 400
 
         price = data.get('close')
         open_ = data.get('open')
@@ -95,10 +94,16 @@ def tradingview_webhook():
             return json.dumps({"status": "error", "message": "بيانات ناقصة من Alert"}), 400
 
         # فلتر زمني
-        if timeframe in ["1", "1m", "5", "5m"]:
-            interval_sec = 30
+        if timeframe in ["5", "5m"]:
+            interval_sec = 300
         elif timeframe in ["15", "15m"]:
-            interval_sec = 90
+            interval_sec = 900
+        elif timeframe in ["1h"]:
+            interval_sec = 3600
+        elif timeframe in ["4h"]:
+            interval_sec = 14400
+        elif timeframe in ["1d"]:
+            interval_sec = 86400
         else:
             interval_sec = 150
         now = datetime.now(timezone.utc)
@@ -172,7 +177,7 @@ def tradingview_webhook():
 {candle_analysis}
 {proximity_analysis if proximity_analysis else ''}
 {liquidity_analysis if liquidity_analysis else ''}
-{'[صورة الشارت](%s)' % chart_url if chart_url else '❌ لا يوجد صورة'}
+{'[صورة الشارت](%s)' % chart_url if chart_url else '❌ لا يوجد صورة'} [تأكدي من تفعيل "Include screenshot"]
 {('[شارت TradingView](%s)' % tv_link) if tv_link else ''}""".strip()
 
         send_telegram_message(analysis)

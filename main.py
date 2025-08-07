@@ -1,18 +1,34 @@
-import schedule
-import time
-import yfinance as yf
-from datetime import datetime, timezone
-from dateutil import tz
+from flask import Flask, request
 import requests
-import logging
 import json
-import pandas as pd
-import ta
+from datetime import datetime, timezone
+import os
+import logging
 
-logging.basicConfig(level=logging.INFO)
-
+# إعدادات تليجرام
 TELEGRAM_BOT_TOKEN = '7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw'
 TELEGRAM_CHAT_ID = '715830182'
+
+# إعدادات Discord
+DISCORD_WEBHOOK_URL = ''  # غيّريها إذا لزم
+
+# Rate limiting
+REJECT_NOTIFY_LIMIT_SEC = 300
+last_reject_notify = {'ts': datetime(1970, 1, 1, tzinfo=timezone.utc)}
+
+# حدود السيولة
+VOLUME_THRESHOLDS = {
+    'forex': 5000,
+    'indices': 10000,
+    'crypto': 2000
+}
+
+app = Flask(__name__)
+
+# مسار الرئيسي
+@app.route('/', methods=['GET', 'HEAD'])
+def home():
+    return "Shinzooh Webhook شغالة!", 200
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -23,94 +39,58 @@ def send_telegram_message(text):
     except Exception as e:
         logging.exception("[Telegram Error] %s", e)
 
-kwt_tz = tz.gettz('Asia/Kuwait')
+def send_discord_message(text):
+    if DISCORD_WEBHOOK_URL and DISCORD_WEBHOOK_URL.startswith('http'):
+        try:
+            data = {"content": text}
+            response = requests.post(DISCORD_WEBHOOK_URL, json=data)
+            response.raise_for_status()
+        except Exception as e:
+            logging.exception("[Discord Error] %s", e)
 
-symbols = ['GC=F', 'EURUSD=X', 'BTC-USD']  # XAUUSD (Gold), EURUSD, BTCUSD
-frames = {
-    '5m': '5m',
-    '15m': '15m',
-    '1h': '60m',
-    '4h': '240m',
-    '1d': '1d'
-}
+def notify_rejection(reason, alert_data=None):
+    now = datetime.now(timezone.utc)
+    last_time = last_reject_notify.get('ts', datetime(1970, 1, 1, tzinfo=timezone.utc))
+    if (now - last_time).total_seconds() > REJECT_NOTIFY_LIMIT_SEC:
+        msg = f"⚠️ *Alert مرفوض*: {reason}"
+        if alert_data and alert_data.get('interval') and alert_data.get('time'):
+            msg += f"\nالفريم: `{alert_data.get('interval')}`\nالوقت: `{alert_data.get('time')}`"
+        send_telegram_message(msg)
+        send_discord_message(msg)
+        last_reject_notify['ts'] = now
 
-def get_data(symbol, interval):
-    ticker = yf.Ticker(symbol)
-    data = ticker.history(period='1d', interval=interval)
-    if data.empty:
-        return None
-    return data
+def parse_timestamp(ts):
+    if ts is None:
+        raise ValueError("Timestamp is None")
+    if isinstance(ts, str) and 'T' in ts:
+        return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc)
 
-def analyze_ict_smc(data):
-    if len(data) < 2:
-        return "لا بيانات كافية لـ ICT-SMC"
-    last_close = data['Close'].iloc[-1]
-    prev_close = data['Close'].iloc[-2]
-    last_high = data['High'].iloc[-1]
-    last_low = data['Low'].iloc[-1]
-    prev_high = data['High'].iloc[-2]
-    prev_low = data['Low'].iloc[-2]
-    analysis = ""
-    if last_close > prev_close and last_high > prev_high:
-        analysis += f"📈 Order Block صعودي (دعم عند {last_low})\n"
-    elif last_close < prev_close and last_low < prev_low:
-        analysis += f"📉 Order Block هابط (مقاومة عند {last_high})\n"
-    if (last_high - last_low) > (prev_high - prev_low) * 1.5:
-        analysis += "⚠️ Fair Value Gap (فجوة سعرية)\n"
-    return analysis or "لا إشارة ICT-SMC واضحة"
+@app.route('/webhook', methods=['POST'])
+def tradingview_webhook():
+    try:
+        data = request.json or {}
+        price = data.get('close')
+        open_ = data.get('open')
+        timeframe = data.get('interval')
+        timestamp = data.get('time')
+        chart_url = data.get('chart_image_url') or data.get('screenshot_url')
+        high = data.get('high')
+        low = data.get('low')
+        volume = data.get('volume')
+        ticker = data.get('ticker')
 
-def calculate_liquidity(data, asset_type='forex'):
-    threshold = VOLUME_THRESHOLDS.get(asset_type, 5000)
-    volume = data['Volume'].iloc[-1]
-    if volume > threshold:
-        return f"🚨 دخول سيولة قوية! ({volume:.0f})"
-    return "لا سيولة قوية"
+        if not price or not timeframe or not timestamp:
+            notify_rejection("بيانات ناقصة من Alert", data)
+            return json.dumps({"status": "error", "message": "بيانات ناقصة من Alert"}), 400
 
-def calculate_rsi(data):
-    rsi = ta.momentum.RSIIndicator(data['Close']).rsi().iloc[-1]
-    if rsi > 70:
-        return "RSI: overbought"
-    elif rsi < 30:
-        return "RSI: oversold"
-    return "RSI: محايد"
-
-def calculate_ma(data):
-    ma = data['Close'].mean()
-    return f"MA: {ma:.2f}"
-
-def calculate_macd(data):
-    macd = ta.trend.MACD(data['Close']).macd().iloc[-1]
-    if macd > 0:
-        return "MACD: صعودي"
-    elif macd < 0:
-        return "MACD: هابط"
-    return "MACD: محايد"
-
-def get_tradingview_chart_url(symbol, interval):
-    return f"https://www.tradingview.com/chart/?symbol={symbol}&interval={interval}"
-
-def run_analysis(session):
-    for symbol in symbols:
-        for frame_name, interval in frames.items():
-            data = get_data(symbol, interval)
-            if data is None:
-                continue
-            analysis = f"*تحليل {symbol} في {frame_name} - جلسة {session}*\n"
-            analysis += f"السعر: {data['Close'].iloc[-1]:.2f}\n"
-            analysis += analyze_ict_smc(data) + "\n"
-            analysis += calculate_liquidity(data) + "\n"
-            analysis += calculate_rsi(data) + "\n"
-            analysis += calculate_ma(data) + "\n"
-            analysis += calculate_macd(data) + "\n"
-            analysis += f"[صورة الشارت]({get_tradingview_chart_url(symbol, frame_name)})"
-            send_telegram_message(analysis)
-
-schedule.every().day.at("09:00").do(run_analysis, 'سوق لندن')
-schedule.every().day.at("14:00").do(run_analysis, 'سوق نيويورك')
-schedule.every().day.at("16:30").do(run_analysis, 'السوق الأمريكي')
-
-while True:
-    schedule.run_pending()
-    time.sleep(60)
-</parameter
-</xai:function_call
+        # فلتر زمني
+        if timeframe in ["1", "1m", "5", "5m"]:
+            interval_sec = 30
+        elif timeframe in ["15", "15m"]:
+            interval_sec = 90
+        else:
+            interval_sec = 150
+        now = datetime.now(timezone.utc)
+        try:
+            alert_time = parse

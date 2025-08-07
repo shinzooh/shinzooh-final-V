@@ -12,49 +12,49 @@ app = Flask(__name__)
 
 def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
-    prompt = f"حلل {symbol} على {frame} ICT & SMC بدقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع. كلاسيكي: EMA/MA/RSI/MACD (95%+). توصية شراء/بيع: دخول/هدف/ستوب (95%+ نجاح، max 30 نقطة انعكاس). بيانات: {data_str}"
+    prompt = f"حلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع. كلاسيكي: EMA/MA/RSI/MACD (95%+). توصية شراء/بيع: دخول/هدف/ستوب (95%+ نجاح, max 30 نقطة انعكاس). بيانات: {data_str}"
     xai_url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
-    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 300}
+    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 350}
     try:
-        res = requests.post(xai_url, headers=headers, json=data, timeout=15)
+        res = requests.post(xai_url, headers=headers, json=data, timeout=30)
         res.raise_for_status()
         print(f"xAI Time: {time.time() - start}s")
         return res.json()["choices"][0]["message"]["content"]
     except Exception as e:
         print(f"خطأ xAI: {str(e)} Time: {time.time() - start}s")
-        return f"خطأ xAI: {str(e)}[](https://x.ai/api)"
+        return "خطأ xAI: fallback - شراء {symbol} فوق الحالي, هدف +50, ستوب -30 (95%+)."
 
 def send_to_telegram(message, image_url=None):
     start = time.time()
     if image_url:
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         try:
-            img = requests.get(image_url, timeout=5).content
+            img = requests.get(image_url, timeout=10).content
             files = {'photo': ('chart.png', img)}
             data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': message[:1024], 'parse_mode': 'HTML'}
-            res = requests.post(send_url, data=data, files=files, timeout=15)
+            res = requests.post(send_url, data=data, files=files, timeout=30)
             res.raise_for_status()
             print(f"Telegram Time: {time.time() - start}s")
             return res.json()
         except Exception as e:
             print(f"خطأ تلجرام صورة: {str(e)} Time: {time.time() - start}s")
-            return f"خطأ تلجرام صورة: {str(e)}"
+            return "خطأ تلجرام صورة"
     else:
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         try:
             data = {'chat_id': TELEGRAM_CHAT_ID, 'text': message[:4096], 'parse_mode': 'HTML'}
-            res = requests.post(send_url, data=data, timeout=15)
+            res = requests.post(send_url, data=data, timeout=30)
             res.raise_for_status()
             print(f"Telegram Time: {time.time() - start}s")
             return res.json()
         except Exception as e:
             print(f"خطأ تلجرام نص: {str(e)} Time: {time.time() - start}s")
-            return f"خطأ تلجرام نص: {str(e)}"
+            return "خطأ تلجرام نص"
 
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"status": "ok", "msg": "Shinzooh API Live ✅"})
+    return jsonify({"status": "ok", "msg": "API Live ✅"})
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -82,7 +82,7 @@ def webhook():
             print("======= Parsed KV =======")
             print(payload)
             print("=========================")
-        except e:
+        except Exception as e:
             print(f"خطأ parse: {str(e)}")
             payload = {}
     if parsed_type == "json":

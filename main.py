@@ -1,71 +1,68 @@
 import requests
 from flask import Flask, request, jsonify
 import json
-import os  # لقراءة ENV
+import os
+import time
 
-# إعدادات النظام
-XAI_API_KEY = os.getenv("XAI_API_KEY")  # من ENV في Render
+XAI_API_KEY = os.getenv("XAI_API_KEY")
 TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
 TELEGRAM_CHAT_ID = "715830182"
 
 app = Flask(__name__)
 
 def get_xai_analysis(symbol, frame, data_str):
-    prompt = (
-        f"""حلل {symbol} على فريم {frame} بناءً على ICT & SMC بدقة 95%+: 
-- مناطق السيولة، BOS/CHoCH، FVG، OB، Premium/Discount، شموع قوية.
-أضف تحليل كلاسيكي: EMA/MA، RSI، MACD (مستويات دقيقة 95%+).
-توصية (شراء/بيع): دخول/هدف/ستوب (نجاح 95%+, انعكاس max 30 نقطة).
-البيانات: {data_str}"""
-    )
+    start = time.time()
+    prompt = f"حلل {symbol} على {frame} ICT & SMC بدقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع. كلاسيكي: EMA/MA/RSI/MACD (95%+). توصية شراء/بيع: دخول/هدف/ستوب (95%+ نجاح، max 30 نقطة انعكاس). بيانات: {data_str}"
     xai_url = "https://api.x.ai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {XAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "grok-4-latest",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 1200
-    }
+    headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
+    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 300}
     try:
-        res = requests.post(xai_url, headers=headers, json=data, timeout=60)
+        res = requests.post(xai_url, headers=headers, json=data, timeout=15)
         res.raise_for_status()
+        print(f"xAI Time: {time.time() - start}s")
         return res.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        print(f"خطأ في xAI API: {str(e)}")
-        return f"خطأ في xAI API: {str(e)} (تفاصيل: https://x.ai/api)"
+        print(f"خطأ xAI: {str(e)} Time: {time.time() - start}s")
+        return f"خطأ xAI: {str(e)}[](https://x.ai/api)"
 
 def send_to_telegram(message, image_url=None):
+    start = time.time()
     if image_url:
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         try:
-            img_content = requests.get(image_url).content
-            files = {'photo': ('chart.png', img_content)}
-            data = { 'chat_id': TELEGRAM_CHAT_ID, 'caption': message[:1024], 'parse_mode': 'HTML' }
-            res = requests.post(send_url, data=data, files=files)
+            img = requests.get(image_url, timeout=5).content
+            files = {'photo': ('chart.png', img)}
+            data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': message[:1024], 'parse_mode': 'HTML'}
+            res = requests.post(send_url, data=data, files=files, timeout=15)
             res.raise_for_status()
+            print(f"Telegram Time: {time.time() - start}s")
             return res.json()
         except Exception as e:
-            print(f"خطأ في إرسال تلجرام (صورة): {str(e)}")
-            return f"خطأ في إرسال تلجرام (صورة): {str(e)}"
+            print(f"خطأ تلجرام صورة: {str(e)} Time: {time.time() - start}s")
+            return f"خطأ تلجرام صورة: {str(e)}"
     else:
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         try:
-            data = { 'chat_id': TELEGRAM_CHAT_ID, 'text': message[:4096], 'parse_mode': 'HTML' }
-            res = requests.post(send_url, data=data)
+            data = {'chat_id': TELEGRAM_CHAT_ID, 'text': message[:4096], 'parse_mode': 'HTML'}
+            res = requests.post(send_url, data=data, timeout=15)
             res.raise_for_status()
+            print(f"Telegram Time: {time.time() - start}s")
             return res.json()
         except Exception as e:
-            print(f"خطأ في إرسال تلجرام (نص): {str(e)}")
-            return f"خطأ في إرسال تلجرام (نص): {str(e)}"
+            print(f"خطأ تلجرام نص: {str(e)} Time: {time.time() - start}s")
+            return f"خطأ تلجرام نص: {str(e)}"
+
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"status": "ok", "msg": "Shinzooh API Live ✅"})
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    start = time.time()
     body = request.data.decode('utf-8')
-    print("======= Raw Body from TradingView =======")
+    print("======= Raw Body =======")
     print(body)
-    print("=========================================")
+    print("=========================")
     payload = {}
     parsed_type = ""
     image_url = None
@@ -75,18 +72,18 @@ def webhook():
     try:
         payload = json.loads(body)
         parsed_type = "json"
-        print("======= Parsed Payload (JSON) =======")
+        print("======= Parsed JSON =======")
         print(payload)
-        print("==============================")
-    except Exception:
+        print("===========================")
+    except:
         try:
             payload = dict(pair.split('=') for pair in body.split(',') if '=' in pair)
             parsed_type = "kv"
-            print("======= Parsed Payload (key=value) =======")
+            print("======= Parsed KV =======")
             print(payload)
-            print("==============================")
-        except Exception as e:
-            print(f"خطأ في parse payload: {str(e)}")
+            print("=========================")
+        except e:
+            print(f"خطأ parse: {str(e)}")
             payload = {}
     if parsed_type == "json":
         symbol = payload.get("ticker") or payload.get("SYMB") or "XAUUSD"
@@ -106,6 +103,7 @@ def webhook():
         data_str = body
     analysis = get_xai_analysis(symbol, frame, data_str)
     send_to_telegram(f"{symbol} {frame}\n\n{analysis}", image_url)
+    print(f"Webhook Time: {time.time() - start}s")
     return jsonify({"status": "ok", "analysis": analysis})
 
 if __name__ == "__main__":

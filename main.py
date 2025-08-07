@@ -1,6 +1,7 @@
 from flask import Flask, request
 import requests
 import json
+import sqlite3
 from datetime import datetime, timezone
 import os
 import logging
@@ -18,7 +19,57 @@ VOLUME_THRESHOLDS = {
     'crypto': 2000
 }
 
+DB_FILE = "shinzooh_alerts.db"
+
 app = Flask(__name__)
+
+# === DB FUNCTIONS ===
+def db_init():
+    con = sqlite3.connect(DB_FILE)
+    cur = con.cursor()
+    cur.execute('''CREATE TABLE IF NOT EXISTS alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker TEXT,
+        timeframe TEXT,
+        price REAL,
+        high REAL,
+        low REAL,
+        open REAL,
+        volume REAL,
+        alert_time TEXT,
+        received_at TEXT,
+        chart_url TEXT,
+        raw TEXT
+    )''')
+    con.commit()
+    con.close()
+
+def db_insert(alert):
+    con = sqlite3.connect(DB_FILE)
+    cur = con.cursor()
+    cur.execute('''INSERT INTO alerts 
+        (ticker, timeframe, price, high, low, open, volume, alert_time, received_at, chart_url, raw)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        (
+            alert.get('ticker'),
+            alert.get('timeframe'),
+            alert.get('price'),
+            alert.get('high'),
+            alert.get('low'),
+            alert.get('open'),
+            alert.get('volume'),
+            alert.get('timestamp'),
+            alert.get('received_at'),
+            alert.get('chart_url'),
+            alert.get('raw'),
+        )
+    )
+    con.commit()
+    con.close()
+
+@app.before_first_request
+def setup_db():
+    db_init()
 
 @app.route('/', methods=['GET', 'HEAD'])
 def home():
@@ -83,6 +134,7 @@ def tradingview_webhook():
         except Exception:
             data = parse_plain_kv(raw_data)
 
+        # يدعم جميع الأسماء الشائعة للنقاط المطلوبة
         price      = data.get('close')   or data.get('c')
         open_      = data.get('open')    or data.get('o')
         timeframe  = data.get('interval') or data.get('tf')
@@ -93,10 +145,27 @@ def tradingview_webhook():
         volume     = data.get('volume')  or data.get('v')
         ticker     = data.get('ticker')  or data.get('symb') or data.get('symbol')
 
+        # === تسجيل الإشارة للقاعدة
+        alert_obj = {
+            "ticker": ticker,
+            "timeframe": timeframe,
+            "price": float(price) if price else None,
+            "high": float(high) if high else None,
+            "low": float(low) if low else None,
+            "open": float(open_) if open_ else None,
+            "volume": float(volume) if volume else None,
+            "timestamp": timestamp,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "chart_url": chart_url,
+            "raw": raw_data[:5000]  # مسجّل أول 5000 حرف فقط (أمان)
+        }
+        db_insert(alert_obj)
+
         if not price or not timeframe or not timestamp:
             notify_rejection("بيانات ناقصة من Alert", data)
             return json.dumps({"status": "error", "message": "بيانات ناقصة من Alert"}), 400
 
+        # فلتر زمني للفريمات المطلوبة
         if timeframe in ["5", "5m"]:
             interval_sec = 300
         elif timeframe in ["15", "15m"]:
@@ -188,6 +257,7 @@ def tradingview_webhook():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
+    db_init()
     port = int(os.environ.get('PORT', 5000))
-    print("🚀 Shinzooh TradingView Webhook is running! Check /webhook endpoint.")
+    print("🚀 Shinzooh Webhook + SQLite Logger is running! Check /webhook endpoint.")
     app.run(host='0.0.0.0', port=port)

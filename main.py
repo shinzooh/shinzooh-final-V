@@ -15,7 +15,7 @@ def get_xai_analysis(symbol, frame, data_str):
     prompt = f"حلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع. كلاسيكي: EMA/MA/RSI/MACD (95%+). توصية شراء/بيع: دخول/هدف/ستوب (95%+ نجاح, max 30 نقطة انعكاس). بيانات: {data_str}"
     xai_url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
-    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 350}
+    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 500}
     try:
         res = requests.post(xai_url, headers=headers, json=data, timeout=30)
         res.raise_for_status()

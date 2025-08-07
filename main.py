@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
-    prompt = f"حلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع مع ذكر مستويات. كلاسيكي: EMA/MA/RSI/MACD (95%+ ذكر أرقام). توصية شراء/بيع كاملة: ذكر إذا شراء أو بيع, دخول/هدف/ستوب (95%+ نجاح, max 30 نقطة انعكاس, ذكر نقاط دقيقة). بيانات: {data_str}"
+    prompt = f"حلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع مع مستويات. كلاسيكي: EMA/MA/RSI/MACD (95%+, أرقام دقيقة). توصية نهائية (شراء أو بيع) مع ذكر: نقطة دخول, هدف Take Profit, ستوب Stop Loss (95%+ نجاح, max 30 نقطة انعكاس, سبب مبني على SMC/ICT والمؤشرات). تحليل مرتب نقاط واضحة. بيانات: {data_str}"
     xai_url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
     data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 500}
@@ -20,14 +20,18 @@ def get_xai_analysis(symbol, frame, data_str):
         res = requests.post(xai_url, headers=headers, json=data, timeout=30)
         res.raise_for_status()
         print(f"xAI Time: {time.time() - start}s")
-        return res.json()["choices"][0]["message"]["content"]
+        result = res.json()["choices"][0]["message"]["content"]
+        print("====== xAI Analysis ======")
+        print(result)
+        print("==========================")
+        return result
     except Exception as e:
         print(f"خطأ xAI: {str(e)} Time: {time.time() - start}s")
         return "خطأ xAI: fallback - شراء {symbol} فوق الحالي, هدف +50, ستوب -30 (95%+)."
 
 def send_to_telegram(message, image_url=None):
     start = time.time()
-    if image_url and image_url != '{{chart_image_url}}':  # تجنب غير صالح
+    if image_url and 'http' in image_url:
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         try:
             img = requests.get(image_url, timeout=10).content

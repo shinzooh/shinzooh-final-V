@@ -80,48 +80,6 @@ def parse_plain_kv(text):
         pass
     return d
 
-# دالة لحساب RSI مبسط
-def calculate_rsi(current_price, previous_price=None):
-    if previous_price is None:
-        return "لا يوجد بيانات كافية لـ RSI"
-    price_change = current_price - previous_price
-    if price_change > 0:
-        return "RSI: صعودي (قد يكون overbought)"
-    elif price_change < 0:
-        return "RSI: هابط (قد يكون oversold)"
-    return "RSI: محايد"
-
-# دالة لحساب MA
-def calculate_ma(prices):
-    if not prices or len(prices) == 0:
-        return None
-    return sum(prices) / len(prices)
-
-# دالة لحساب MACD مبسط
-def calculate_macd(short_ma, long_ma):
-    if short_ma is None or long_ma is None:
-        return "لا يوجد بيانات كافية لـ MACD"
-    macd_line = short_ma - long_ma
-    if macd_line > 0:
-        return "MACD: صعودي (إشارة شراء محتملة)"
-    elif macd_line < 0:
-        return "MACD: هابط (إشارة بيع محتملة)"
-    return "MACD: محايد"
-
-# دالة لتحليل ICT-SMC مبسط (أساسي)
-def analyze_ict_smc(high, low, close, prev_high=None, prev_low=None, prev_close=None):
-    analysis = ""
-    # Order Block
-    if prev_close and prev_high and prev_low:
-        if close > prev_close and high > prev_high:
-            analysis += f"📈 Order Block صعودي (دعم عند {low})\n"
-        elif close < prev_close and low < prev_low:
-            analysis += f"📉 Order Block هابط (مقاومة عند {high})\n"
-    # Fair Value Gap
-    if prev_high and prev_low and (high - low) > (prev_high - prev_low) * 1.5:
-        analysis += "⚠️ Fair Value Gap (فجوة سعرية - فرصة رجوع)\n"
-    return analysis.strip() if analysis else "لا يوجد إشارة ICT-SMC واضحة"
-
 @app.route('/webhook', methods=['POST'])
 def tradingview_webhook():
     try:
@@ -132,14 +90,6 @@ def tradingview_webhook():
             data = json.loads(raw_data) if raw_data else {}
         except Exception:
             data = parse_plain_kv(raw_data)
-
-        # حفظ البيانات السابقة للتحليل
-        if not hasattr(app, 'prev_candle'):
-            app.prev_candle = {'high': None, 'low': None, 'close': None}
-        prev_high = app.prev_candle['high']
-        prev_low = app.prev_candle['low']
-        prev_close = app.prev_candle['close']
-        app.prev_candle = {'high': float(high) if high else None, 'low': float(low) if low else None, 'close': float(price) if price else None}
 
         # قبول عدة مسميات للمتغيرات
         price = data.get('close') or data.get('c')
@@ -181,34 +131,6 @@ def tradingview_webhook():
             notify_rejection(f"Alert قديم جداً ({int(diff_sec)} ثانية)", data)
             return json.dumps({"status": "error", "message": f"Alert قديم ({int(diff_sec)} ثواني)"}), 400
 
-        # تحليل ICT-SMC
-        ict_analysis = analyze_ict_smc(float(high) if high else None, float(low) if low else None, float(price) if price else None, prev_high, prev_low, prev_close)
-
-        # دخول السيولة
-        liquidity_analysis = ""
-        try:
-            if volume and ticker:
-                volume_f = float(volume)
-                asset_type = ('forex' if ticker in ['XAUUSD', 'XAGUSD', 'EURUSD', 'GBPJPY', 'EURCHF', 'EURJPY', 'GBPUSD', 'USDJPY']
-                             else 'indices' if ticker in ['US100', 'US30']
-                             else 'crypto' if ticker in ['BTCUSD', 'ETHUSD']
-                             else 'forex')
-                volume_threshold = VOLUME_THRESHOLDS.get(asset_type, 5000)
-                if volume_f > volume_threshold:
-                    liquidity_analysis = f"🚨 دخول سيولة قوية! ({volume_f:.0f})"
-        except Exception:
-            pass
-
-        # RSI
-        rsi_analysis = calculate_rsi(float(price) if price else None, prev_close)
-
-        # MA
-        ma_value = calculate_ma([float(price) if price else 0, prev_close if prev_close else 0]) if prev_close else None
-        ma_analysis = ma_value if ma_value is not None else "لا يوجد بيانات كافية لـ MA"
-
-        # MACD
-        macd_analysis = calculate_macd(ma_value, ma_value * 0.9 if ma_value else None) if ma_value is not None else "لا يوجد بيانات كافية لـ MACD"
-
         # تحليل الشمعة
         try:
             candle_analysis = ("🔵 شمعة صاعدة (Bullish)" if float(price) > float(open_) else
@@ -233,6 +155,21 @@ def tradingview_webhook():
         except Exception:
             pass
 
+        # تحليل السيولة
+        liquidity_analysis = ""
+        try:
+            if volume and ticker:
+                volume_f = float(volume)
+                asset_type = ('forex' if ticker in ['XAUUSD', 'XAGUSD', 'EURUSD', 'GBPJPY', 'EURCHF', 'EURJPY', 'GBPUSD', 'USDJPY']
+                             else 'indices' if ticker in ['US100', 'US30']
+                             else 'crypto' if ticker in ['BTCUSD', 'ETHUSD']
+                             else 'forex')
+                volume_threshold = VOLUME_THRESHOLDS.get(asset_type, 5000)
+                if volume_f > volume_threshold:
+                    liquidity_analysis = f"🚨 دخول سيولة قوية! ({volume_f:.0f})"
+        except Exception:
+            pass
+
         # بناء رابط TradingView
         tv_link = ""
         if ticker and timeframe:
@@ -250,13 +187,9 @@ def tradingview_webhook():
 الفريم: `{timeframe}`
 السعر: `{price}`
 الوقت: `{timestamp}`
-ICT-SMC: {ict_analysis}
-دخول السيولة: {liquidity_analysis if liquidity_analysis else 'لا يوجد سيولة قوية'}
-RSI: {rsi_analysis}
-MA: {ma_analysis if isinstance(ma_analysis, (int, float)) else ma_analysis}
-MACD: {macd_analysis}
 {candle_analysis}
 {proximity_analysis if proximity_analysis else ''}
+{liquidity_analysis if liquidity_analysis else ''}
 {'[صورة الشارت](%s)' % chart_url if chart_url else '❌ لا يوجد صورة'} [تأكد من تفعيل "Include screenshot"]
 {('[شارت TradingView](%s)' % tv_link) if tv_link else ''}""".strip()
 

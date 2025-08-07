@@ -62,22 +62,23 @@ def notify_rejection(reason, alert_data=None):
 def parse_timestamp(ts):
     if ts is None:
         raise ValueError("Timestamp is None")
-    if isinstance(ts, str) and 'T' in ts:
+    if isinstance(ts, str) and ('T' in ts or '.' in ts):
         return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-    return datetime.fromtimestamp(int(ts), tz=timezone.utc)
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc)
+    except ValueError:
+        raise ValueError(f"Timestamp format not supported: {ts}")
 
 @app.route('/webhook', methods=['POST'])
 def tradingview_webhook():
     try:
-        data = request.json or {}
-        if not data:
-            raw_data = request.data.decode('utf-8')
-            try:
-                data = json.loads(raw_data)
-            except json.JSONDecodeError:
-                logging.warning(f"Invalid JSON data: {raw_data}")
-                notify_rejection("بيانات غير صالحة (غير JSON)", None)
-                return json.dumps({"status": "error", "message": "بيانات غير صالحة"}), 400
+        # قراءة البيانات كنص دايمًا
+        raw_data = request.data.decode('utf-8', errors='ignore')
+        try:
+            data = json.loads(raw_data) if raw_data else {}
+        except Exception as e:
+            logging.warning(f"Invalid JSON data, treating as empty: {raw_data} - Error: {e}")
+            data = {}
 
         price = data.get('close')
         open_ = data.get('open')
@@ -93,7 +94,7 @@ def tradingview_webhook():
             notify_rejection("بيانات ناقصة من Alert", data)
             return json.dumps({"status": "error", "message": "بيانات ناقصة من Alert"}), 400
 
-        # فلتر زمني
+        # فلتر زمني للفريمات المطلوبة
         if timeframe in ["5", "5m"]:
             interval_sec = 300
         elif timeframe in ["15", "15m"]:
@@ -191,5 +192,5 @@ def tradingview_webhook():
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
     port = int(os.environ.get('PORT', 5000))
-    print("🚀 Shinzooh TradingView Webhook is running! Check /webhook endpoint.")
+    print("🚀 Shinzooh Webhook is running! Check /webhook endpoint.")
     app.run(host='0.0.0.0', port=port)

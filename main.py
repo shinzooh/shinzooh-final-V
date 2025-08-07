@@ -25,7 +25,7 @@ VOLUME_THRESHOLDS = {
 
 app = Flask(__name__)
 
-# مسار الصفحة الرئيسية للفحص الصحي
+# مسار الصفحة الرئيسية
 @app.route('/', methods=['GET', 'HEAD'])
 def home():
     return "Shinzooh Webhook شغالة!", 200
@@ -60,14 +60,53 @@ def notify_rejection(reason, alert_data=None):
         last_reject_notify['ts'] = now
 
 def parse_timestamp(ts):
-    """تحاول تحويل الطابع الزمني إلى datetime. تدعم صيغ ISO مثل '2025-08-04T00:33:09Z' أو طابع يونكس (مُحول لسلسلة أو رقم)."""
     if ts is None:
         raise ValueError("Timestamp is None")
-    # إذا كان نص وفيه حرف 'T'، نفترض صيغة ISO
     if isinstance(ts, str) and 'T' in ts:
         return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-    # غير ذلك، نفترض أنه طابع يونكس
     return datetime.fromtimestamp(int(ts), tz=timezone.utc)
+
+# دالة لحساب RSI مبسط
+def calculate_rsi(current_price, previous_price=None):
+    if previous_price is None:
+        return "لا يوجد بيانات كافية لـ RSI"
+    price_change = current_price - previous_price
+    if price_change > 0:
+        return "RSI: صعودي (قد يكون overbought)"
+    elif price_change < 0:
+        return "RSI: هابط (قد يكون oversold)"
+    return "RSI: محايد"
+
+# دالة لحساب MA
+def calculate_ma(prices):
+    if not prices or len(prices) == 0:
+        return None
+    return sum(prices) / len(prices)
+
+# دالة لحساب MACD مبسط
+def calculate_macd(short_ma, long_ma):
+    if short_ma is None or long_ma is None:
+        return "لا يوجد بيانات كافية لـ MACD"
+    macd_line = short_ma - long_ma
+    if macd_line > 0:
+        return "MACD: صعودي (إشارة شراء محتملة)"
+    elif macd_line < 0:
+        return "MACD: هابط (إشارة بيع محتملة)"
+    return "MACD: محايد"
+
+# دالة لتحليل ICT-SMC مبسط (أساسي)
+def analyze_ict_smc(high, low, close, prev_high=None, prev_low=None, prev_close=None):
+    analysis = ""
+    # Order Block
+    if prev_close and prev_high and prev_low:
+        if close > prev_close and high > prev_high:
+            analysis += f"📈 Order Block صعودي (دعم عند {low})\n"
+        elif close < prev_close and low < prev_low:
+            analysis += f"📉 Order Block هابط (مقاومة عند {high})\n"
+    # Fair Value Gap
+    if prev_high and prev_low and (high - low) > (prev_high - prev_low) * 1.5:
+        analysis += "⚠️ Fair Value Gap (فجوة سعرية - فرصة رجوع)\n"
+    return analysis.strip() if analysis else "لا يوجد إشارة ICT-SMC واضحة"
 
 @app.route('/webhook', methods=['POST'])
 def tradingview_webhook():
@@ -83,18 +122,32 @@ def tradingview_webhook():
         volume = data.get('volume')
         ticker = data.get('ticker')
 
-        # التحقق من البيانات الأساسية
+        # حفظ البيانات السابقة للتحليل
+        if not hasattr(app, 'prev_candle'):
+            app.prev_candle = {'high': None, 'low': None, 'close': None}
+        prev_high = app.prev_candle['high']
+        prev_low = app.prev_candle['low']
+        prev_close = app.prev_candle['close']
+        app.prev_candle = {'high': float(high) if high else None, 'low': float(low) if low else None, 'close': float(price) if price else None}
+
         if not price or not timeframe or not timestamp:
             notify_rejection("بيانات ناقصة من Alert", data)
             return json.dumps({"status": "error", "message": "بيانات ناقصة من Alert"}), 400
 
-        # فلتر زمني ديناميكي
-        if timeframe in ["1", "1m", "5", "5m"]:
-            interval_sec = 30
+        # فلتر زمني للفريمات المطلوبة
+        if timeframe in ["5", "5m"]:
+            interval_sec = 300
         elif timeframe in ["15", "15m"]:
-            interval_sec = 90
+            interval_sec = 900
+        elif timeframe in ["1h"]:
+            interval_sec = 3600
+        elif timeframe in ["4h"]:
+            interval_sec = 14400
+        elif timeframe in ["1d"]:
+            interval_sec = 86400
         else:
             interval_sec = 150
+
         now = datetime.now(timezone.utc)
         try:
             alert_time = parse_timestamp(timestamp)
@@ -105,6 +158,34 @@ def tradingview_webhook():
         if diff_sec > interval_sec:
             notify_rejection(f"Alert قديم جداً ({int(diff_sec)} ثانية)", data)
             return json.dumps({"status": "error", "message": f"Alert قديم ({int(diff_sec)} ثواني)"}), 400
+
+        # تحليل ICT-SMC الأساسي
+        ict_analysis = analyze_ict_smc(float(high) if high else None, float(low) if low else None, float(price) if price else None, prev_high, prev_low, prev_close)
+
+        # دخول السيولة
+        liquidity_analysis = ""
+        try:
+            if volume and ticker:
+                volume_f = float(volume)
+                asset_type = ('forex' if ticker in ['XAUUSD', 'XAGUSD', 'EURUSD', 'GBPJPY', 'EURCHF', 'EURJPY', 'GBPUSD', 'USDJPY']
+                             else 'indices' if ticker in ['US100', 'US30']
+                             else 'crypto' if ticker in ['BTCUSD', 'ETHUSD']
+                             else 'forex')
+                volume_threshold = VOLUME_THRESHOLDS.get(asset_type, 5000)
+                if volume_f > volume_threshold:
+                    liquidity_analysis = f"🚨 دخول سيولة قوية! ({volume_f:.0f})"
+        except Exception:
+            pass
+
+        # RSI
+        rsi_analysis = calculate_rsi(float(price) if price else None, prev_close)
+
+        # MA
+        ma_value = calculate_ma([float(price) if price else 0, prev_close if prev_close else 0]) if prev_close else None
+        ma_analysis = ma_value if ma_value is not None else "لا يوجد بيانات كافية لـ MA"
+
+        # MACD
+        macd_analysis = calculate_macd(ma_value, ma_value * 0.9 if ma_value else None) if ma_value is not None else "لا يوجد بيانات كافية لـ MACD"
 
         # تحليل الشمعة
         try:
@@ -130,21 +211,6 @@ def tradingview_webhook():
         except Exception:
             pass
 
-        # تحليل الفوليوم
-        liquidity_analysis = ""
-        try:
-            if volume and ticker:
-                volume_f = float(volume)
-                asset_type = ('forex' if ticker in ['XAUUSD', 'XAGUSD', 'EURUSD', 'GBPJPY', 'EURCHF', 'EURJPY', 'GBPUSD', 'USDJPY']
-                             else 'indices' if ticker in ['US100', 'US30']
-                             else 'crypto' if ticker in ['BTCUSD', 'ETHUSD']
-                             else 'forex')
-                volume_threshold = VOLUME_THRESHOLDS.get(asset_type, 5000)
-                if volume_f > volume_threshold:
-                    liquidity_analysis = f"🚨 دخول سيولة قوية! ({volume_f:.0f})"
-        except Exception:
-            pass
-
         # بناء رابط TradingView
         tv_link = ""
         if ticker and timeframe:
@@ -162,9 +228,13 @@ def tradingview_webhook():
 الفريم: `{timeframe}`
 السعر: `{price}`
 الوقت: `{timestamp}`
+ICT-SMC: {ict_analysis}
+دخول السيولة: {liquidity_analysis if liquidity_analysis else 'لا يوجد سيولة قوية'}
+RSI: {rsi_analysis}
+MA: {ma_analysis if isinstance(ma_analysis, (int, float)) else ma_analysis}
+MACD: {macd_analysis}
 {candle_analysis}
 {proximity_analysis if proximity_analysis else ''}
-{liquidity_analysis if liquidity_analysis else ''}
 {'[صورة الشارت](%s)' % chart_url if chart_url else '❌ لا يوجد صورة'} [تأكدي من تفعيل "Include screenshot" في إعداد التنبيه]
 {('[شارت TradingView](%s)' % tv_link) if tv_link else ''}""".strip()
 
@@ -178,6 +248,6 @@ def tradingview_webhook():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    port = int(os.environ.get('PORT', 5000))  # قيمة افتراضية عامة
+    port = int(os.environ.get('PORT', 5000))
     print("🚀 Shinzooh TradingView Webhook is running! Check /webhook endpoint.")
     app.run(host='0.0.0.0', port=port)

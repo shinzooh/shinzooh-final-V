@@ -69,7 +69,17 @@ def parse_timestamp(ts):
 @app.route('/webhook', methods=['POST'])
 def tradingview_webhook():
     try:
-        data = request.json or {}
+        # تحقق من Content-Type
+        content_type = request.headers.get('Content-Type')
+        if content_type != 'application/json':
+            logging.warning(f"Unsupported Content-Type: {content_type}")
+            notify_rejection("نوع البيانات غير مدعوم (غير JSON)", None)
+            return json.dumps({"status": "error", "message": "نوع البيانات غير مدعوم"}), 415
+
+        data = request.json
+        if not data:
+            data = json.loads(request.data.decode('utf-8'))  # لو request.json فشل، جرب قراءة البيانات يدوي
+
         price = data.get('close')
         open_ = data.get('open')
         timeframe = data.get('interval')

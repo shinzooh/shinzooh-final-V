@@ -11,7 +11,7 @@ import hashlib
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
 TELEGRAM_CHAT_ID = "715830182"
-CHART_IMG_KEY = "LnZgxkVoM2a8sGR5YyuVAatTy6uEnpRCf6u2srN0"  # مفتاحك هنا
+CHART_IMG_KEY = "LnZgxkVoM2a8sGR5YyuVAatTy6uEnpRCf6u2srN0"  # مفتاحك
 
 # retry setup
 session = requests.Session()
@@ -93,7 +93,7 @@ def get_xai_analysis(symbol, frame, data_str):
         return main_analysis, rec_fmt
     except Exception as e:
         print(f"xAI Error: {str(e)} Time: {time.time() - start}s")
-        fallback = "<b>🚦 التوصية التجارية (خطأ)</b>\nمافي توصية بسبب مشكلة في الاتصال أو الاستجابات."
+        fallback = "<b>🚦 التوصية التجارية (خطأ)</b>\nمافي توصية بسبب مشكلة في الاتصال أو الاستجابة."
         return "⚠️ xAI Error: fallback - يرجى مراجعة الاتصال أو البيانات.", fallback
 
 def get_chart_image(symbol, interval):
@@ -102,7 +102,7 @@ def get_chart_image(symbol, interval):
         "symbol": symbol,
         "interval": interval,
         "apikey": CHART_IMG_KEY,
-        "theme": "dark",  # اختياري، غير لو تبي light
+        "theme": "dark",
         "width": 800,
         "height": 600
     }
@@ -182,7 +182,7 @@ def webhook():
 
     def process_analysis():
         main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
-        image = get_chart_image(symbol, frame)  # سحب الصورة تلقائي
+        image = get_chart_image(symbol, frame)  # سحب الصورة
         if main_analysis:
             send_to_telegram(msg_title + main_analysis, image=image)
         if rec_fmt:

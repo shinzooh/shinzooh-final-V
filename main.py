@@ -6,6 +6,7 @@ import json
 import os
 import time
 from threading import Thread
+import hashlib  # إضافة للـ hash
 
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
@@ -18,6 +19,8 @@ adapter = HTTPAdapter(max_retries=retry)
 session.mount('https://', adapter)
 
 app = Flask(__name__)
+
+last_payloads = {}  # لتخزين hash الـ payload الأخير لكل symbol
 
 def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
@@ -41,14 +44,12 @@ def get_xai_analysis(symbol, frame, data_str):
         print(result)
         print("==========================")
         sections = result.split('---')
-        # Main analysis with spacing
         bullets = [l.strip("•*- ") for l in sections[0].splitlines() if l.strip()]
-        main_analysis = "\n\n".join(  # مسافة سطرين بين كل نقطة
+        main_analysis = "\n\n".join(
             [line for line in bullets if line and not line.lower().startswith(
                 ("ict & smc", "classic indicator", "trade recommendation", "type", "entry", "take profit", "stop loss", "reason")
             ) and "|" not in line and not line.startswith("-")]
         )
-        # Recommendation section
         rec_bullets = []
         if len(sections) > 1:
             rec_lines = [l.strip("•*- ") for l in sections[1].splitlines() if l.strip()]
@@ -85,9 +86,9 @@ def get_xai_analysis(symbol, frame, data_str):
         fallback = f"⚠️ xAI Error: fallback - Buy {symbol} above current, TP +50, SL -30 (95%+)."
         return fallback, None
 
-def send_to_telegram(message, image_url=None):
+def send_to_telegram(message, image_url=None, is_photo=False):
     start = time.time()
-    if image_url and isinstance(image_url, str) and image_url.startswith('http'):
+    if is_photo and image_url and isinstance(image_url, str) and image_url.startswith('http'):
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         try:
             img = requests.get(image_url, timeout=10).content
@@ -146,13 +147,23 @@ def webhook():
     )
     msg_title = f"📊 <b>{symbol} {frame}</b>\n"
 
+    # Check duplicate
+    payload_hash = hashlib.sha256(body.encode()).hexdigest()
+    last = last_payloads.get(symbol, {'hash': '', 'time': 0})
+    if payload_hash == last['hash'] and time.time() - last['time'] < 10:
+        print("Duplicate webhook ignored")
+        print(f"Webhook Response Time: {time.time() - start}s")
+        return jsonify({"status": "ok", "msg": "Duplicate ignored"})
+
+    last_payloads[symbol] = {'hash': payload_hash, 'time': time.time()}
+
     def process_analysis():
         main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
         if main_analysis:
-            # رسالة التحليل منفصلة مع صورة إذا موجودة
-            send_to_telegram(msg_title + main_analysis, image_url)
+            send_to_telegram(msg_title + main_analysis)
+            if image_url:
+                send_to_telegram("🖼️ Chart Snapshot:", image_url, is_photo=True)
         if rec_fmt:
-            # رسالة التوصية منفصلة (بدون صورة إضافية، أو أضف image_url لو تبي)
             send_to_telegram(rec_fmt)
         print(f"Webhook Processing Time: {time.time() - start}s")
 

@@ -9,9 +9,9 @@ from threading import Thread
 import hashlib
 
 XAI_API_KEY = os.getenv("XAI_API_KEY")
-TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
-TELEGRAM_CHAT_ID = "715830182"
-CHART_IMG_KEY = "LnZgxkVoM2a8sGR5YyuVAatTy6uEnpRCf6u2srN0"  # مفتاحك
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHART_IMG_KEY = os.getenv("CHART_IMG_KEY")  # مفتاحك الجديد من Environment
 
 # retry setup
 session = requests.Session()

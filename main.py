@@ -6,7 +6,7 @@ import json
 import os
 import time
 from threading import Thread
-import hashlib  # إضافة للـ hash
+import hashlib
 
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
@@ -20,7 +20,7 @@ session.mount('https://', adapter)
 
 app = Flask(__name__)
 
-last_payloads = {}  # لتخزين hash الـ payload الأخير لكل symbol
+last_payloads = {}
 
 def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
@@ -71,7 +71,8 @@ def get_xai_analysis(symbol, frame, data_str):
                 rec_lookup['stop'] = l.split(':', 1)[-1].strip()
             elif 'reason' in l2:
                 rec_lookup['reason'] = l.split(':', 1)[-1].strip()
-        if all([rec_lookup['type'], rec_lookup['entry'], rec_lookup['take'], rec_lookup['stop']]):
+        rec_fields = [rec_lookup['type'], rec_lookup['entry'], rec_lookup['take'], rec_lookup['stop']]
+        if any(rec_fields):
             rec_fmt = (f"<b>🚦 Trade Recommendation</b>\n"
                        f"Type: <b>{rec_lookup['type']}</b>\n"
                        f"Entry: <b>{rec_lookup['entry']}</b>\n"
@@ -79,12 +80,13 @@ def get_xai_analysis(symbol, frame, data_str):
                        f"Stop Loss: <b>{rec_lookup['stop']}</b>\n"
                        f"Reason: {rec_lookup['reason']}")
         else:
-            rec_fmt = None
+            last_lines = "\n".join(bullets[-5:])  # fallback آخر 5 سطور
+            rec_fmt = f"<b>🚦 Trade Recommendation (fallback)</b>\n{last_lines}"
         return main_analysis, rec_fmt
     except Exception as e:
         print(f"xAI Error: {str(e)} Time: {time.time() - start}s")
         fallback = f"⚠️ xAI Error: fallback - Buy {symbol} above current, TP +50, SL -30 (95%+)."
-        return fallback, None
+        return fallback, fallback
 
 def send_to_telegram(message, image_url=None, is_photo=False):
     start = time.time()
@@ -147,7 +149,6 @@ def webhook():
     )
     msg_title = f"📊 <b>{symbol} {frame}</b>\n"
 
-    # Check duplicate
     payload_hash = hashlib.sha256(body.encode()).hexdigest()
     last = last_payloads.get(symbol, {'hash': '', 'time': 0})
     if payload_hash == last['hash'] and time.time() - last['time'] < 10:

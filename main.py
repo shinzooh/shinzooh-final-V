@@ -12,29 +12,40 @@ app = Flask(__name__)
 
 def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
-    prompt = f"Analyze {symbol} on {frame} with ICT & SMC at 95%+ accuracy: mention liquidity/BOS/CHoCH/FVG/OB/Premium/Discount/candles with levels. Classic: EMA/MA/RSI/MACD (95%+, exact numbers). Final recommendation (buy or sell) with: entry point, Take Profit target, Stop Loss (95%+ success, max 30 pips reversal, reason based on SMC/ICT & indicators). Structured in clear points. Data: {data_str}"
+    prompt = f"""رد بالعربي فقط.
+حلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع مع المستويات والأرقام. كلاسيكي: EMA/MA/RSI/MACD (95%+, أرقام دقيقة).
+اكتب التحليل الفني كامل ومرتب كنقاط.
+---
+ثم أكتب في قسم منفصل (بعد ---):
+التوصية النهائية فقط: (شراء أو بيع) + نقطة دخول (Entry) + هدف (Take Profit) + ستوب (Stop Loss) مع السبب المختصر.
+البيانات: {data_str}
+"""
     xai_url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
-    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1200}
+    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 700}
     try:
         res = requests.post(xai_url, headers=headers, json=data, timeout=30)
         res.raise_for_status()
-        print(f"xAI Time: {time.time() - start}s")
-        print("====== xAI RAW Response ======")
-        print(res.text)
-        print("==============================")
         result = res.json()["choices"][0]["message"]["content"]
+        print(f"xAI Time: {time.time() - start}s")
         print("====== xAI Analysis ======")
         print(result)
         print("==========================")
-        return result
+        # يقسم الرد لو فيه --- وإلا كله
+        if '---' in result:
+            analysis, recommendation = result.split('---', 1)
+        else:
+            analysis, recommendation = result, ''
+        return analysis.strip(), recommendation.strip()
     except Exception as e:
         print(f"خطأ xAI: {str(e)} Time: {time.time() - start}s")
-        return "خطأ xAI: fallback - شراء {symbol} فوق الحالي, هدف +50, ستوب -30 (95%+)."
+        fallback = f"⚠️ خطأ xAI: fallback - شراء {symbol} فوق الحالي، هدف +50، ستوب -30 (95%+)."
+        return fallback, ""
 
 def send_to_telegram(message, image_url=None):
     start = time.time()
-    if image_url and 'http' in image_url:
+    # التحقق من وجود صورة وارسالها
+    if image_url and isinstance(image_url, str) and image_url.startswith('http'):
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         try:
             img = requests.get(image_url, timeout=10).content
@@ -42,22 +53,22 @@ def send_to_telegram(message, image_url=None):
             data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': message[:1024], 'parse_mode': 'HTML'}
             res = requests.post(send_url, data=data, files=files, timeout=30)
             res.raise_for_status()
-            print(f"Telegram Time: {time.time() - start}s")
+            print(f"Telegram Photo Time: {time.time() - start}s")
             return res.json()
         except Exception as e:
             print(f"خطأ تلجرام صورة: {str(e)} Time: {time.time() - start}s")
-            return "خطأ تلجرام صورة"
+            return "⚠️ خطأ تلجرام صورة"
     else:
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         try:
             data = {'chat_id': TELEGRAM_CHAT_ID, 'text': message[:4096], 'parse_mode': 'HTML'}
             res = requests.post(send_url, data=data, timeout=30)
             res.raise_for_status()
-            print(f"Telegram Time: {time.time() - start}s")
+            print(f"Telegram Text Time: {time.time() - start}s")
             return res.json()
         except Exception as e:
             print(f"خطأ تلجرام نص: {str(e)} Time: {time.time() - start}s")
-            return "خطأ تلجرام نص"
+            return "⚠️ خطأ تلجرام نص"
 
 @app.route("/", methods=["GET"])
 def home():
@@ -70,12 +81,7 @@ def webhook():
     print("======= Raw Body =======")
     print(body)
     print("=========================")
-    payload = {}
-    parsed_type = ""
-    image_url = None
-    symbol = "XAUUSD"
-    frame = "1H"
-    data_str = body
+    # payload extraction
     try:
         payload = json.loads(body)
         parsed_type = "json"
@@ -92,26 +98,28 @@ def webhook():
         except Exception as e:
             print(f"خطأ parse: {str(e)}")
             payload = {}
-    if parsed_type == "json":
-        symbol = payload.get("ticker") or payload.get("SYMB") or "XAUUSD"
-        tf = payload.get("interval") or payload.get("TF") or "1H"
-        frame = tf + 'm' if tf.isdigit() else tf
-        image_url = payload.get("image_url") or payload.get("snapshot_url")
-        data_str = json.dumps(payload)
-    elif parsed_type == "kv":
-        symbol = payload.get("SYMB") or "XAUUSD"
-        tf = payload.get("TF") or "1H"
-        frame = tf + 'm' if tf.isdigit() else tf
-        data_str = body
-        image_url = payload.get("image_url") or payload.get("snapshot_url")
-    else:
-        symbol = "XAUUSD"
-        frame = "1H"
-        data_str = body
-    analysis = get_xai_analysis(symbol, frame, data_str)
-    send_to_telegram(f"{symbol} {frame}\n\n{analysis}", image_url)
+    # رمز ديناميكي وفريم ديناميكي
+    symbol = payload.get("SYMB") or payload.get("ticker") or "XAUUSD"
+    tf = payload.get("TF") or payload.get("interval") or "1H"
+    frame = f"{tf}m" if str(tf).isdigit() else tf
+    data_str = json.dumps(payload, ensure_ascii=False)
+    image_url = (
+        payload.get("snapshot_url")
+        or payload.get("image_url")
+        or payload.get("chart_image_url")
+    )
+    # توليد عنوان واضح للرسائل
+    msg_title = f"📊 <b>{symbol} {frame}</b>\n"
+    # تحليل وتقسيم الرد
+    analysis, recommendation = get_xai_analysis(symbol, frame, data_str)
+    # أرسل التحليل مع صورة snapshot (لو فيه)
+    if analysis:
+        send_to_telegram(msg_title + analysis, image_url)
+    # أرسل التوصية النهائية برسالة منفصلة (أوضح للمتابعة)
+    if recommendation:
+        send_to_telegram("🚦 <b>توصية التداول</b>\n" + msg_title + recommendation)
     print(f"Webhook Time: {time.time() - start}s")
-    return jsonify({"status": "ok", "analysis": analysis})
+    return jsonify({"status": "ok", "analysis": analysis, "recommendation": recommendation})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)

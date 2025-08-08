@@ -9,7 +9,7 @@ from threading import Thread
 import hashlib
 
 XAI_API_KEY = os.getenv("XAI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # لـ GPT-5
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # لـ GPT-4o
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CHART_IMG_API_KEY = os.getenv("CHART_IMG_API_KEY")  # مفتاح chart-img.com
@@ -59,7 +59,7 @@ def send_to_telegram_with_image(message, image_url):
     except Exception as e:
         print(f"Telegram Send Error: {e}")
 
-# ===== GPT-5 main =====
+# ===== GPT-4o Main =====
 def gpt5_analysis(symbol, timeframe, price_data):
     prompt = f"""
 حلل {symbol} على فريم {timeframe} باستخدام SMC و ICT:
@@ -71,14 +71,24 @@ def gpt5_analysis(symbol, timeframe, price_data):
 البيانات:
 {price_data}
 """
-    r = session.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-        json={"model": "gpt-5", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1800}
-    )
-    return r.json()["choices"][0]["message"]["content"]
+    try:
+        r = session.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_tokens": 1800
+            }
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"GPT Analysis Error: {str(e)}")
+        return "⚠️ خطأ في تحليل GPT: يرجى التحقق من المفتاح أو الاتصال."
 
-# ===== GPT-5 nano =====
+# ===== GPT-4o-mini Recommendation =====
 def gpt5_recommendation(symbol, timeframe, price_data):
     prompt = f"""
 اعطني توصية مباشرة لـ {symbol} على فريم {timeframe}:
@@ -90,12 +100,22 @@ def gpt5_recommendation(symbol, timeframe, price_data):
 البيانات:
 {price_data}
 """
-    r = session.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-        json={"model": "gpt-5-nano", "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 1800}
-    )
-    return r.json()["choices"][0]["message"]["content"]
+    try:
+        r = session.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": 1800
+            }
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"GPT Recommendation Error: {str(e)}")
+        return "⚠️ خطأ في توصية GPT: يرجى التحقق من المفتاح أو الاتصال."
 
 # ===== xAI Grok =====
 def xai_analysis(symbol, timeframe, price_data):
@@ -107,31 +127,33 @@ def xai_analysis(symbol, timeframe, price_data):
 البيانات:
 {price_data}
 """
-    r = session.post(
-        "https://api.x.ai/v1/chat/completions",
-        headers={"Authorization": f"Bearer {XAI_API_KEY}"},
-        json={"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1800}
-    )
-    return r.json()["choices"][0]["message"]["content"]
+    try:
+        r = session.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {XAI_API_KEY}"},
+            json={
+                "model": "grok-beta",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_tokens": 1800
+            }
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"xAI Error: {str(e)}")
+        return "⚠️ خطأ في تحليل xAI: يرجى التحقق من المفتاح أو الاتصال."
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     start = time.time()
     body = request.data.decode('utf-8')
-    print("======= Raw Body =======")
-    print(body)
-    print("=========================")
+    print("======= Raw Body =======\n" + body + "\n=========================")
     try:
         payload = json.loads(body)
-        print("======= Parsed JSON =======")
-        print(payload)
-        print("===========================")
     except:
         try:
             payload = dict(pair.split('=') for pair in body.split(',') if '=' in pair)
-            print("======= Parsed KV =======")
-            print(payload)
-            print("=========================")
         except Exception as e:
             print(f"Parse Error: {str(e)}")
             payload = {}
@@ -139,12 +161,17 @@ def webhook():
     tf = payload.get("TF") or payload.get("interval") or "1H"
     frame = f"{tf}m" if str(tf).isdigit() else tf
     data_str = json.dumps(payload, ensure_ascii=False)
+    msg_title = f"📊 <b>{symbol} {frame}</b>\n"
+
     payload_hash = hashlib.sha256(body.encode()).hexdigest()
     last = last_payloads.get(symbol, {'hash': '', 'time': 0})
     if payload_hash == last['hash'] and time.time() - last['time'] < 10:
+        print("Duplicate webhook ignored")
         return jsonify({"status": "ok", "msg": "Duplicate ignored"})
+
     last_payloads[symbol] = {'hash': payload_hash, 'time': time.time()}
-    def process_all():
+
+    def process_analysis():
         chart_url = get_chart_image(symbol, frame)
         analysis = gpt5_analysis(symbol, frame, data_str)
         send_to_telegram_with_image(f"📊 <b>تحليل السوق ({symbol} - {frame})</b>\n{analysis}", chart_url)
@@ -152,8 +179,10 @@ def webhook():
         send_to_telegram_with_image(f"🎯 <b>توصية الصفقة ({symbol} - {frame})</b>\n{recommendation}", chart_url)
         xai_result = xai_analysis(symbol, frame, data_str)
         send_to_telegram_with_image(f"🤖 <b>تحليل xAI ({symbol} - {frame})</b>\n{xai_result}", chart_url)
-    Thread(target=process_all).start()
-    return jsonify({"status": "ok", "msg": "Processing"})
+        print(f"Webhook Processing Time: {time.time() - start}s")
+
+    Thread(target=process_analysis).start()
+    return jsonify({"status": "ok", "msg": "Received and processing"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)

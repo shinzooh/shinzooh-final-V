@@ -1,4 +1,6 @@
 import requests
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 from flask import Flask, request, jsonify
 import json
 import os
@@ -7,6 +9,12 @@ import time
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
 TELEGRAM_CHAT_ID = "715830182"
+
+# retry setup
+session = requests.Session()
+retry = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+adapter = HTTPAdapter(max_retries=retry)
+session.mount('https://', adapter)
 
 app = Flask(__name__)
 
@@ -23,7 +31,7 @@ def get_xai_analysis(symbol, frame, data_str):
     headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
     data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1200}
     try:
-        res = requests.post(xai_url, headers=headers, json=data, timeout=30)
+        res = session.post(xai_url, headers=headers, json=data, timeout=60)
         res.raise_for_status()
         result = res.json()["choices"][0]["message"]["content"]
         print(f"xAI Time: {time.time() - start}s")
@@ -42,10 +50,8 @@ def get_xai_analysis(symbol, frame, data_str):
         if len(sections) > 1:
             rec_lines = [l.strip("•*- ") for l in sections[1].splitlines() if l.strip()]
             for line in rec_lines:
-                # Ignore table/markdown lines
                 if "|" in line or line.startswith("-"):
                     continue
-                # Only keep lines that are recommendation fields
                 if any(key in line.lower() for key in ["type", "entry", "profit", "stop", "reason"]):
                     rec_bullets.append(line)
         rec_lookup = {'type': '', 'entry': '', 'take': '', 'stop': '', 'reason': ''}
@@ -61,7 +67,6 @@ def get_xai_analysis(symbol, frame, data_str):
                 rec_lookup['stop'] = l.split(':', 1)[-1].strip()
             elif 'reason' in l2:
                 rec_lookup['reason'] = l.split(':', 1)[-1].strip()
-        # Send rec only if ALL values are filled
         if all([rec_lookup['type'], rec_lookup['entry'], rec_lookup['take'], rec_lookup['stop']]):
             rec_fmt = (f"<b>🚦 Trade Recommendation</b>\n"
                        f"Type: <b>{rec_lookup['type']}</b>\n"
@@ -117,14 +122,12 @@ def webhook():
     print("=========================")
     try:
         payload = json.loads(body)
-        parsed_type = "json"
         print("======= Parsed JSON =======")
         print(payload)
         print("===========================")
     except:
         try:
             payload = dict(pair.split('=') for pair in body.split(',') if '=' in pair)
-            parsed_type = "kv"
             print("======= Parsed KV =======")
             print(payload)
             print("=========================")
@@ -139,13 +142,19 @@ def webhook():
         payload.get("snapshot_url") or payload.get("image_url") or payload.get("chart_image_url")
     )
     msg_title = f"📊 <b>{symbol} {frame}</b>\n"
-    main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
-    if main_analysis:
-        send_to_telegram(msg_title + main_analysis, image_url)
-    if rec_fmt:
-        send_to_telegram(rec_fmt)
-    print(f"Webhook Time: {time.time() - start}s")
-    return jsonify({"status": "ok", "analysis": main_analysis, "rec": rec_fmt})
+
+    def process_analysis():
+        main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
+        if main_analysis:
+            send_to_telegram(msg_title + main_analysis, image_url)
+        if rec_fmt:
+            send_to_telegram(rec_fmt)
+        print(f"Webhook Processing Time: {time.time() - start}s")
+
+    from threading import Thread
+    Thread(target=process_analysis).start()
+    print(f"Webhook Response Time: {time.time() - start}s")
+    return jsonify({"status": "ok", "msg": "Received and processing"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)

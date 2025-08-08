@@ -14,9 +14,9 @@ def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
     prompt = (
         f"Analyze {symbol} on {frame} with ICT & SMC (liquidity, BOS, CHoCH, FVG, OB, Premium/Discount, candles with levels) with 95%+ accuracy. "
-        "Write each SMC and Classic Indicator point as a clear bullet point with exact values from input. No section headers, no markdown tables, just clear concise bullets. "
+        "Write each SMC and Classic Indicator point as a clear bullet point with exact values from input. No section headers, no markdown, no table, just clear concise bullets. "
         "---"
-        "At the end, give the trade recommendation as bullets ONLY: Type, Entry, Take Profit, Stop Loss, Reason. No headers, no markdown, just bullets. "
+        "At the end, give the trade recommendation as bullets ONLY: Type, Entry, Take Profit, Stop Loss, Reason. No headers, no markdown, no table, only bullets. "
         f"Data: {data_str}"
     )
     xai_url = "https://api.x.ai/v1/chat/completions"
@@ -32,12 +32,20 @@ def get_xai_analysis(symbol, frame, data_str):
         print("==========================")
         sections = result.split('---')
         bullets = [l.strip("•*- ") for l in sections[0].splitlines() if l.strip()]
-        main_analysis = "\n".join([f"• {line}" for line in bullets if line and not line.lower().startswith(("ict & smc", "classic indicator", "trade recommendation", "type", "entry", "take profit", "stop loss", "reason"))])
+        main_analysis = "\n".join(
+            [f"• {line}" for line in bullets
+             if line and not line.lower().startswith(
+                ("ict & smc", "classic indicator", "trade recommendation", "type", "entry", "take profit", "stop loss", "reason")
+             ) and "|" not in line and not line.startswith("-")]
+        )
         # Recommendation section
         rec_bullets = []
         if len(sections) > 1:
             rec_lines = [l.strip("•*- ") for l in sections[1].splitlines() if l.strip()]
             for line in rec_lines:
+                # Ignore table/markdown lines
+                if "|" in line or line.startswith("-"):
+                    continue
                 # Only keep lines that are recommendation fields
                 if any(key in line.lower() for key in ["type", "entry", "profit", "stop", "reason"]):
                     rec_bullets.append(line)

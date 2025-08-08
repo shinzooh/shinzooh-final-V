@@ -13,13 +13,10 @@ app = Flask(__name__)
 def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
     prompt = (
-        f"Analyze {symbol} on {frame} using ICT & SMC (liquidity, BOS, CHoCH, FVG, OB, Premium/Discount, candles with levels) with 95%+ accuracy. "
-        "Each point as a bullet, use exact numbers from the input. Be concise.\n"
-        "---\n"
-        "Next, write Classic Indicators section (EMA/MA/RSI/MACD), each as a bullet, with exact values from the input.\n"
-        "---\n"
-        "Finally, give the trade recommendation in a summary table:\n"
-        "Type (Buy/Sell):\nEntry:\nTake Profit:\nStop Loss:\nReason (max 1 line):\n"
+        f"Analyze {symbol} on {frame} with ICT & SMC (liquidity, BOS, CHoCH, FVG, OB, Premium/Discount, candles with levels) with 95%+ accuracy. "
+        "Write each SMC and Classic Indicator point as a clear bullet point with exact values from input. No section headers, no markdown tables, just clear concise bullets. "
+        "---"
+        "At the end, give the trade recommendation as bullets ONLY: Type, Entry, Take Profit, Stop Loss, Reason. No headers, no markdown, just bullets. "
         f"Data: {data_str}"
     )
     xai_url = "https://api.x.ai/v1/chat/completions"
@@ -34,48 +31,40 @@ def get_xai_analysis(symbol, frame, data_str):
         print(result)
         print("==========================")
         sections = result.split('---')
-        ict_smc = sections[0].strip() if len(sections) > 0 else ''
-        classic = sections[1].strip() if len(sections) > 1 else ''
-        rec = sections[2].strip() if len(sections) > 2 else ''
-        return ict_smc, classic, rec
+        bullets = [l.strip("•*- ") for l in sections[0].splitlines() if l.strip()]
+        main_analysis = "\n".join([f"• {line}" for line in bullets if line and not line.lower().startswith(("ict & smc", "classic indicator", "trade recommendation", "type", "entry", "take profit", "stop loss", "reason"))])
+        # Recommendation section
+        rec_bullets = []
+        if len(sections) > 1:
+            rec_lines = [l.strip("•*- ") for l in sections[1].splitlines() if l.strip()]
+            for line in rec_lines:
+                # Only keep lines that are recommendation fields
+                if any(key in line.lower() for key in ["type", "entry", "profit", "stop", "reason"]):
+                    rec_bullets.append(line)
+        rec_lookup = {'type': '', 'entry': '', 'take': '', 'stop': '', 'reason': ''}
+        for l in rec_bullets:
+            l2 = l.lower()
+            if 'type' in l2:
+                rec_lookup['type'] = l.split(':', 1)[-1].strip()
+            elif 'entry' in l2:
+                rec_lookup['entry'] = l.split(':', 1)[-1].strip()
+            elif 'profit' in l2:
+                rec_lookup['take'] = l.split(':', 1)[-1].strip()
+            elif 'stop' in l2:
+                rec_lookup['stop'] = l.split(':', 1)[-1].strip()
+            elif 'reason' in l2:
+                rec_lookup['reason'] = l.split(':', 1)[-1].strip()
+        rec_fmt = (f"<b>🚦 Trade Recommendation</b>\n"
+                   f"Type: <b>{rec_lookup['type']}</b>\n"
+                   f"Entry: <b>{rec_lookup['entry']}</b>\n"
+                   f"Take Profit: <b>{rec_lookup['take']}</b>\n"
+                   f"Stop Loss: <b>{rec_lookup['stop']}</b>\n"
+                   f"Reason: {rec_lookup['reason']}")
+        return main_analysis, rec_fmt
     except Exception as e:
         print(f"xAI Error: {str(e)} Time: {time.time() - start}s")
         fallback = f"⚠️ xAI Error: fallback - Buy {symbol} above current, TP +50, SL -30 (95%+)."
-        return fallback, "", ""
-
-def format_analysis(text):
-    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
-    formatted = []
-    for line in lines:
-        if not line.startswith("•") and (line.startswith("- ") or line.startswith("* ")):
-            formatted.append("• " + line[2:])
-        elif not line.startswith("•") and not line.endswith(":"):
-            formatted.append("• " + line)
-        else:
-            formatted.append(line)
-    return "\n".join(formatted)
-
-def format_rec(text):
-    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
-    lookup = {'type': '', 'entry': '', 'take': '', 'stop': '', 'reason': ''}
-    for l in lines:
-        l2 = l.lower()
-        if 'type' in l2:
-            lookup['type'] = l.split(':', 1)[-1].strip()
-        elif 'entry' in l2:
-            lookup['entry'] = l.split(':', 1)[-1].strip()
-        elif 'profit' in l2:
-            lookup['take'] = l.split(':', 1)[-1].strip()
-        elif 'stop' in l2:
-            lookup['stop'] = l.split(':', 1)[-1].strip()
-        elif 'reason' in l2:
-            lookup['reason'] = l.split(':', 1)[-1].strip()
-    return (f"<b>🚦 Trade Recommendation</b>\n"
-            f"Type: <b>{lookup['type']}</b>\n"
-            f"Entry: <b>{lookup['entry']}</b>\n"
-            f"Take Profit: <b>{lookup['take']}</b>\n"
-            f"Stop Loss: <b>{lookup['stop']}</b>\n"
-            f"Reason: {lookup['reason']}")
+        return fallback, ""
 
 def send_to_telegram(message, image_url=None):
     start = time.time()
@@ -137,18 +126,13 @@ def webhook():
     data_str = json.dumps(payload, ensure_ascii=False)
     image_url = ( payload.get("snapshot_url") or payload.get("image_url") or payload.get("chart_image_url") )
     msg_title = f"📊 <b>{symbol} {frame}</b>\n"
-    ict_smc, classic, rec = get_xai_analysis(symbol, frame, data_str)
-    if ict_smc:
-        ict_fmt = format_analysis(ict_smc)
-        send_to_telegram(msg_title + "\n<b>ICT & SMC Analysis</b>\n" + ict_fmt, image_url)
-    if classic:
-        classic_fmt = format_analysis(classic)
-        send_to_telegram("<b>Classic Indicators</b>\n" + classic_fmt)
-    if rec:
-        rec_fmt = format_rec(rec)
+    main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
+    if main_analysis:
+        send_to_telegram(msg_title + main_analysis, image_url)
+    if rec_fmt:
         send_to_telegram(rec_fmt)
     print(f"Webhook Time: {time.time() - start}s")
-    return jsonify({"status": "ok", "ict_smc": ict_smc, "classic": classic, "rec": rec})
+    return jsonify({"status": "ok", "analysis": main_analysis, "rec": rec_fmt})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)

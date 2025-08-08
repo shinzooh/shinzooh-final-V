@@ -11,7 +11,6 @@ import hashlib
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-CHART_IMG_KEY = os.getenv("CHART_IMG_KEY")  # مفتاحك الجديد من Environment
 
 # retry setup
 session = requests.Session()
@@ -96,49 +95,18 @@ def get_xai_analysis(symbol, frame, data_str):
         fallback = "<b>🚦 التوصية التجارية (خطأ)</b>\nمافي توصية بسبب مشكلة في الاتصال أو الاستجابة."
         return "⚠️ xAI Error: fallback - يرجى مراجعة الاتصال أو البيانات.", fallback
 
-def get_chart_image(symbol, interval):
-    url = "https://api.chart-img.com/v1/tradingview/advanced-chart"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "apikey": CHART_IMG_KEY,
-        "theme": "dark",
-        "width": 800,
-        "height": 600
-    }
-    try:
-        res = requests.get(url, params=params, timeout=10)
-        res.raise_for_status()
-        return res.content  # binary image
-    except Exception as e:
-        print(f"Chart Img Error: {str(e)}")
-        return None
-
-def send_to_telegram(message, image=None):
+def send_to_telegram(message):
     start = time.time()
-    if image:
-        send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-        try:
-            files = {'photo': ('chart.png', image)}
-            data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': message[:1024], 'parse_mode': 'HTML'}
-            res = requests.post(send_url, data=data, files=files, timeout=30)
-            res.raise_for_status()
-            print(f"Telegram Photo Time: {time.time() - start}s")
-            return res.json()
-        except Exception as e:
-            print(f"Telegram Photo Error: {str(e)} Time: {time.time() - start}s")
-            return "⚠️ Telegram Photo Error"
-    else:
-        send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        try:
-            data = {'chat_id': TELEGRAM_CHAT_ID, 'text': message[:4096], 'parse_mode': 'HTML'}
-            res = requests.post(send_url, data=data, timeout=30)
-            res.raise_for_status()
-            print(f"Telegram Text Time: {time.time() - start}s")
-            return res.json()
-        except Exception as e:
-            print(f"Telegram Text Error: {str(e)} Time: {time.time() - start}s")
-            return "⚠️ Telegram Text Error"
+    send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        data = {'chat_id': TELEGRAM_CHAT_ID, 'text': message[:4096], 'parse_mode': 'HTML'}
+        res = requests.post(send_url, data=data, timeout=30)
+        res.raise_for_status()
+        print(f"Telegram Text Time: {time.time() - start}s")
+        return res.json()
+    except Exception as e:
+        print(f"Telegram Text Error: {str(e)} Time: {time.time() - start}s")
+        return "⚠️ Telegram Text Error"
 
 @app.route("/", methods=["GET"])
 def home():
@@ -182,9 +150,8 @@ def webhook():
 
     def process_analysis():
         main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
-        image = get_chart_image(symbol, frame)  # سحب الصورة
         if main_analysis:
-            send_to_telegram(msg_title + main_analysis, image=image)
+            send_to_telegram(msg_title + main_analysis)
         if rec_fmt:
             send_to_telegram(rec_fmt)
         print(f"Webhook Processing Time: {time.time() - start}s")

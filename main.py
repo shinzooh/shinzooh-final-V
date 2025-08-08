@@ -12,17 +12,19 @@ app = Flask(__name__)
 
 def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
-    prompt = f"""رد بالعربي فقط.
-حلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع مع المستويات والأرقام. كلاسيكي: EMA/MA/RSI/MACD (95%+, أرقام دقيقة).
-اكتب التحليل الفني كامل ومرتب كنقاط.
----
-ثم أكتب في قسم منفصل (بعد ---):
-التوصية النهائية فقط: (شراء أو بيع) + نقطة دخول (Entry) + هدف (Take Profit) + ستوب (Stop Loss) مع السبب المختصر.
-البيانات: {data_str}
-"""
+    prompt = (
+        f"Analyze {symbol} on {frame} using ICT & SMC (liquidity, BOS, CHoCH, FVG, OB, Premium/Discount, candles with levels) with 95%+ accuracy. "
+        "Each point as a bullet, use exact numbers from the input. Be concise.\n"
+        "---\n"
+        "Next, write Classic Indicators section (EMA/MA/RSI/MACD), each as a bullet, with exact values from the input.\n"
+        "---\n"
+        "Finally, give the trade recommendation in a summary table:\n"
+        "Type (Buy/Sell):\nEntry:\nTake Profit:\nStop Loss:\nReason (max 1 line):\n"
+        f"Data: {data_str}"
+    )
     xai_url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
-    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 700}
+    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1200}
     try:
         res = requests.post(xai_url, headers=headers, json=data, timeout=30)
         res.raise_for_status()
@@ -31,20 +33,52 @@ def get_xai_analysis(symbol, frame, data_str):
         print("====== xAI Analysis ======")
         print(result)
         print("==========================")
-        # يقسم الرد لو فيه --- وإلا كله
-        if '---' in result:
-            analysis, recommendation = result.split('---', 1)
-        else:
-            analysis, recommendation = result, ''
-        return analysis.strip(), recommendation.strip()
+        sections = result.split('---')
+        ict_smc = sections[0].strip() if len(sections) > 0 else ''
+        classic = sections[1].strip() if len(sections) > 1 else ''
+        rec = sections[2].strip() if len(sections) > 2 else ''
+        return ict_smc, classic, rec
     except Exception as e:
-        print(f"خطأ xAI: {str(e)} Time: {time.time() - start}s")
-        fallback = f"⚠️ خطأ xAI: fallback - شراء {symbol} فوق الحالي، هدف +50، ستوب -30 (95%+)."
-        return fallback, ""
+        print(f"xAI Error: {str(e)} Time: {time.time() - start}s")
+        fallback = f"⚠️ xAI Error: fallback - Buy {symbol} above current, TP +50, SL -30 (95%+)."
+        return fallback, "", ""
+
+def format_analysis(text):
+    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+    formatted = []
+    for line in lines:
+        if not line.startswith("•") and (line.startswith("- ") or line.startswith("* ")):
+            formatted.append("• " + line[2:])
+        elif not line.startswith("•") and not line.endswith(":"):
+            formatted.append("• " + line)
+        else:
+            formatted.append(line)
+    return "\n".join(formatted)
+
+def format_rec(text):
+    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+    lookup = {'type': '', 'entry': '', 'take': '', 'stop': '', 'reason': ''}
+    for l in lines:
+        l2 = l.lower()
+        if 'type' in l2:
+            lookup['type'] = l.split(':', 1)[-1].strip()
+        elif 'entry' in l2:
+            lookup['entry'] = l.split(':', 1)[-1].strip()
+        elif 'profit' in l2:
+            lookup['take'] = l.split(':', 1)[-1].strip()
+        elif 'stop' in l2:
+            lookup['stop'] = l.split(':', 1)[-1].strip()
+        elif 'reason' in l2:
+            lookup['reason'] = l.split(':', 1)[-1].strip()
+    return (f"<b>🚦 Trade Recommendation</b>\n"
+            f"Type: <b>{lookup['type']}</b>\n"
+            f"Entry: <b>{lookup['entry']}</b>\n"
+            f"Take Profit: <b>{lookup['take']}</b>\n"
+            f"Stop Loss: <b>{lookup['stop']}</b>\n"
+            f"Reason: {lookup['reason']}")
 
 def send_to_telegram(message, image_url=None):
     start = time.time()
-    # التحقق من وجود صورة وارسالها
     if image_url and isinstance(image_url, str) and image_url.startswith('http'):
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         try:
@@ -56,8 +90,8 @@ def send_to_telegram(message, image_url=None):
             print(f"Telegram Photo Time: {time.time() - start}s")
             return res.json()
         except Exception as e:
-            print(f"خطأ تلجرام صورة: {str(e)} Time: {time.time() - start}s")
-            return "⚠️ خطأ تلجرام صورة"
+            print(f"Telegram Photo Error: {str(e)} Time: {time.time() - start}s")
+            return "⚠️ Telegram Photo Error"
     else:
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         try:
@@ -67,8 +101,8 @@ def send_to_telegram(message, image_url=None):
             print(f"Telegram Text Time: {time.time() - start}s")
             return res.json()
         except Exception as e:
-            print(f"خطأ تلجرام نص: {str(e)} Time: {time.time() - start}s")
-            return "⚠️ خطأ تلجرام نص"
+            print(f"Telegram Text Error: {str(e)} Time: {time.time() - start}s")
+            return "⚠️ Telegram Text Error"
 
 @app.route("/", methods=["GET"])
 def home():
@@ -81,7 +115,6 @@ def webhook():
     print("======= Raw Body =======")
     print(body)
     print("=========================")
-    # payload extraction
     try:
         payload = json.loads(body)
         parsed_type = "json"
@@ -96,30 +129,26 @@ def webhook():
             print(payload)
             print("=========================")
         except Exception as e:
-            print(f"خطأ parse: {str(e)}")
+            print(f"Parse Error: {str(e)}")
             payload = {}
-    # رمز ديناميكي وفريم ديناميكي
     symbol = payload.get("SYMB") or payload.get("ticker") or "XAUUSD"
     tf = payload.get("TF") or payload.get("interval") or "1H"
     frame = f"{tf}m" if str(tf).isdigit() else tf
     data_str = json.dumps(payload, ensure_ascii=False)
-    image_url = (
-        payload.get("snapshot_url")
-        or payload.get("image_url")
-        or payload.get("chart_image_url")
-    )
-    # توليد عنوان واضح للرسائل
+    image_url = ( payload.get("snapshot_url") or payload.get("image_url") or payload.get("chart_image_url") )
     msg_title = f"📊 <b>{symbol} {frame}</b>\n"
-    # تحليل وتقسيم الرد
-    analysis, recommendation = get_xai_analysis(symbol, frame, data_str)
-    # أرسل التحليل مع صورة snapshot (لو فيه)
-    if analysis:
-        send_to_telegram(msg_title + analysis, image_url)
-    # أرسل التوصية النهائية برسالة منفصلة (أوضح للمتابعة)
-    if recommendation:
-        send_to_telegram("🚦 <b>توصية التداول</b>\n" + msg_title + recommendation)
+    ict_smc, classic, rec = get_xai_analysis(symbol, frame, data_str)
+    if ict_smc:
+        ict_fmt = format_analysis(ict_smc)
+        send_to_telegram(msg_title + "\n<b>ICT & SMC Analysis</b>\n" + ict_fmt, image_url)
+    if classic:
+        classic_fmt = format_analysis(classic)
+        send_to_telegram("<b>Classic Indicators</b>\n" + classic_fmt)
+    if rec:
+        rec_fmt = format_rec(rec)
+        send_to_telegram(rec_fmt)
     print(f"Webhook Time: {time.time() - start}s")
-    return jsonify({"status": "ok", "analysis": analysis, "recommendation": recommendation})
+    return jsonify({"status": "ok", "ict_smc": ict_smc, "classic": classic, "rec": rec})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)

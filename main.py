@@ -29,13 +29,15 @@ def get_xai_analysis(symbol, frame, data_str):
         "Start with a sentence like 'Current candle on {symbol} {frame} shows close at C, high at H, low at L, indicating a bullish/bearish candle with close above/below the midpoint.' "
         "Then write each SMC and Classic Indicator point as a clear bullet point with exact values from input, one per line, with a blank line after each bullet for spacing. No section headers, no markdown, no table, just clear concise bullets. "
         "---"
-        "At the end, always output these 5 lines exactly (no changes, no skipping, no missing fields):\n"
-        "Type: Buy/Sell\nEntry: <value>\nTake Profit: <value>\nStop Loss: <value>\nReason: <one line>"
-        f"Data: {data_str}"
+        "At the end, ALWAYS output these EXACT 5 lines, in this order (no skipping, no change, no translation, no table):\n"
+        "Type: Buy/Sell\nEntry: <value>\nTake Profit: <value>\nStop Loss: <value>\nReason: <one line only>"
+        "\nIf you cannot generate a full trade recommendation, write:\n"
+        "Type: None\nEntry: -\nTake Profit: -\nStop Loss: -\nReason: No clear signal."
+        f"\nData: {data_str}"
     )
     xai_url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
-    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1200}
+    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1800}
     try:
         res = session.post(xai_url, headers=headers, json=data, timeout=60)
         res.raise_for_status()
@@ -72,11 +74,10 @@ def get_xai_analysis(symbol, frame, data_str):
                 rec_lookup['stop'] = l.split(':', 1)[-1].strip()
             elif 'reason' in l2:
                 rec_lookup['reason'] = l.split(':', 1)[-1].strip()
-        rec_fields = [rec_lookup['type'], rec_lookup['entry'], rec_lookup['take'], rec_lookup['stop']]
-        if any(rec_fields):
+        if rec_lookup['type'] and rec_lookup['type'].lower() in ['buy', 'sell']:
             rec_fmt = (
                 f"<b>🚦 التوصية التجارية</b>\n"
-                f"صفقة: <b>{'بيع' if 'Sell' in rec_lookup['type'] else 'شراء'}</b>\n"
+                f"صفقة: <b>{'بيع' if 'sell' in rec_lookup['type'].lower() else 'شراء'}</b>\n"
                 f"نقاط الدخول: <b>{rec_lookup['entry']}</b>\n"
                 f"نقاط جني الأرباح: <b>{rec_lookup['take']}</b>\n"
                 f"الستوب لوز: <b>{rec_lookup['stop']}</b>\n"
@@ -91,8 +92,8 @@ def get_xai_analysis(symbol, frame, data_str):
         return main_analysis, rec_fmt
     except Exception as e:
         print(f"xAI Error: {str(e)} Time: {time.time() - start}s")
-        fallback = f"⚠️ xAI Error: fallback - Buy {symbol} above current, TP +50, SL -30 (95%+)."
-        return fallback, fallback
+        fallback = "<b>🚦 التوصية التجارية (خطأ)</b>\nمافي توصية بسبب مشكلة في الاتصال أو الاستجابة."
+        return "⚠️ xAI Error: fallback - يرجى مراجعة الاتصال أو البيانات.", fallback
 
 def send_to_telegram(message, image_url=None, is_photo=False):
     start = time.time()

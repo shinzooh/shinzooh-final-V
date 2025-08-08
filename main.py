@@ -33,10 +33,9 @@ def get_xai_analysis(symbol, frame, data_str):
         sections = result.split('---')
         bullets = [l.strip("•*- ") for l in sections[0].splitlines() if l.strip()]
         main_analysis = "\n".join(
-            [f"• {line}" for line in bullets
-             if line and not line.lower().startswith(
+            [f"• {line}" for line in bullets if line and not line.lower().startswith(
                 ("ict & smc", "classic indicator", "trade recommendation", "type", "entry", "take profit", "stop loss", "reason")
-             ) and "|" not in line and not line.startswith("-")]
+            ) and "|" not in line and not line.startswith("-")]
         )
         # Recommendation section
         rec_bullets = []
@@ -118,3 +117,35 @@ def webhook():
     print("=========================")
     try:
         payload = json.loads(body)
+        parsed_type = "json"
+        print("======= Parsed JSON =======")
+        print(payload)
+        print("===========================")
+    except:
+        try:
+            payload = dict(pair.split('=') for pair in body.split(',') if '=' in pair)
+            parsed_type = "kv"
+            print("======= Parsed KV =======")
+            print(payload)
+            print("=========================")
+        except Exception as e:
+            print(f"Parse Error: {str(e)}")
+            payload = {}
+    symbol = payload.get("SYMB") or payload.get("ticker") or "XAUUSD"
+    tf = payload.get("TF") or payload.get("interval") or "1H"
+    frame = f"{tf}m" if str(tf).isdigit() else tf
+    data_str = json.dumps(payload, ensure_ascii=False)
+    image_url = (
+        payload.get("snapshot_url") or payload.get("image_url") or payload.get("chart_image_url")
+    )
+    msg_title = f"📊 <b>{symbol} {frame}</b>\n"
+    main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
+    if main_analysis:
+        send_to_telegram(msg_title + main_analysis, image_url)
+    if rec_fmt:
+        send_to_telegram(rec_fmt)
+    print(f"Webhook Time: {time.time() - start}s")
+    return jsonify({"status": "ok", "analysis": main_analysis, "rec": rec_fmt})
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)

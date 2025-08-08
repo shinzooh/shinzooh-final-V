@@ -29,7 +29,8 @@ def get_xai_analysis(symbol, frame, data_str):
         "Start with a sentence like 'Current candle on {symbol} {frame} shows close at C, high at H, low at L, indicating a bullish/bearish candle with close above/below the midpoint.' "
         "Then write each SMC and Classic Indicator point as a clear bullet point with exact values from input, one per line, with a blank line after each bullet for spacing. No section headers, no markdown, no table, just clear concise bullets. "
         "---"
-        "ALWAYS at the end, give the trade recommendation as bullets ONLY: Type, Entry, Take Profit, Stop Loss, Reason. No headers, no markdown, no table, only bullets. Do not skip this part. "
+        "At the end, always output these 5 lines exactly (no changes, no skipping, no missing fields):\n"
+        "Type: Buy/Sell\nEntry: <value>\nTake Profit: <value>\nStop Loss: <value>\nReason: <one line>"
         f"Data: {data_str}"
     )
     xai_url = "https://api.x.ai/v1/chat/completions"
@@ -73,15 +74,20 @@ def get_xai_analysis(symbol, frame, data_str):
                 rec_lookup['reason'] = l.split(':', 1)[-1].strip()
         rec_fields = [rec_lookup['type'], rec_lookup['entry'], rec_lookup['take'], rec_lookup['stop']]
         if any(rec_fields):
-            rec_fmt = (f"<b>🚦 Trade Recommendation</b>\n"
-                       f"Type: <b>{rec_lookup['type']}</b>\n"
-                       f"Entry: <b>{rec_lookup['entry']}</b>\n"
-                       f"Take Profit: <b>{rec_lookup['take']}</b>\n"
-                       f"Stop Loss: <b>{rec_lookup['stop']}</b>\n"
-                       f"Reason: {rec_lookup['reason']}")
+            rec_fmt = (
+                f"<b>🚦 التوصية التجارية</b>\n"
+                f"صفقة: <b>{'بيع' if 'Sell' in rec_lookup['type'] else 'شراء'}</b>\n"
+                f"نقاط الدخول: <b>{rec_lookup['entry']}</b>\n"
+                f"نقاط جني الأرباح: <b>{rec_lookup['take']}</b>\n"
+                f"الستوب لوز: <b>{rec_lookup['stop']}</b>\n"
+                f"السبب: {rec_lookup['reason']}"
+            )
         else:
-            last_lines = "\n".join(bullets[-5:])  # fallback آخر 5 سطور
-            rec_fmt = f"<b>🚦 Trade Recommendation (fallback)</b>\n{last_lines}"
+            rec_fmt = (
+                "<b>🚦 التوصية التجارية (غير موجودة)</b>\n"
+                "مافي توصية واضحة من xAI!\n"
+                "يرجى مراجعة التحليل فوق أو تحقق من الإعدادات."
+            )
         return main_analysis, rec_fmt
     except Exception as e:
         print(f"xAI Error: {str(e)} Time: {time.time() - start}s")

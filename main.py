@@ -5,6 +5,7 @@ from flask import Flask, request, jsonify
 import json
 import os
 import time
+from threading import Thread
 
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
@@ -22,7 +23,8 @@ def get_xai_analysis(symbol, frame, data_str):
     start = time.time()
     prompt = (
         f"Analyze {symbol} on {frame} with ICT & SMC (liquidity, BOS, CHoCH, FVG, OB, Premium/Discount, candles with levels) with 95%+ accuracy. "
-        "Write each SMC and Classic Indicator point as a clear bullet point with exact values from input. No section headers, no markdown, no table, just clear concise bullets. "
+        "Start with a sentence like 'Current candle on {symbol} {frame} shows close at C, high at H, low at L, indicating a bullish/bearish candle with close above/below the midpoint.' "
+        "Then write each SMC and Classic Indicator point as a clear bullet point with exact values from input, one per line, with a blank line after each bullet for spacing. No section headers, no markdown, no table, just clear concise bullets. "
         "---"
         "ALWAYS at the end, give the trade recommendation as bullets ONLY: Type, Entry, Take Profit, Stop Loss, Reason. No headers, no markdown, no table, only bullets. Do not skip this part. "
         f"Data: {data_str}"
@@ -39,9 +41,10 @@ def get_xai_analysis(symbol, frame, data_str):
         print(result)
         print("==========================")
         sections = result.split('---')
+        # Main analysis with spacing
         bullets = [l.strip("•*- ") for l in sections[0].splitlines() if l.strip()]
-        main_analysis = "\n".join(
-            [f"• {line}" for line in bullets if line and not line.lower().startswith(
+        main_analysis = "\n\n".join(  # مسافة سطرين بين كل نقطة
+            [line for line in bullets if line and not line.lower().startswith(
                 ("ict & smc", "classic indicator", "trade recommendation", "type", "entry", "take profit", "stop loss", "reason")
             ) and "|" not in line and not line.startswith("-")]
         )
@@ -146,12 +149,13 @@ def webhook():
     def process_analysis():
         main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
         if main_analysis:
+            # رسالة التحليل منفصلة مع صورة إذا موجودة
             send_to_telegram(msg_title + main_analysis, image_url)
         if rec_fmt:
+            # رسالة التوصية منفصلة (بدون صورة إضافية، أو أضف image_url لو تبي)
             send_to_telegram(rec_fmt)
         print(f"Webhook Processing Time: {time.time() - start}s")
 
-    from threading import Thread
     Thread(target=process_analysis).start()
     print(f"Webhook Response Time: {time.time() - start}s")
     return jsonify({"status": "ok", "msg": "Received and processing"})

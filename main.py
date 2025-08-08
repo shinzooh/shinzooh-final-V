@@ -9,8 +9,10 @@ from threading import Thread
 import hashlib
 
 XAI_API_KEY = os.getenv("XAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # لـ GPT-5
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHART_IMG_API_KEY = os.getenv("CHART_IMG_API_KEY")  # مفتاح chart-img.com
 
 # retry setup
 session = requests.Session()
@@ -22,95 +24,95 @@ app = Flask(__name__)
 
 last_payloads = {}
 
-def get_xai_analysis(symbol, frame, data_str):
-    start = time.time()
-    prompt = (
-        f"Analyze {symbol} on {frame} with ICT & SMC (liquidity, BOS, CHoCH, FVG, OB, Premium/Discount, candles with levels) with 95%+ accuracy. "
-        "Start with a sentence like 'Current candle on {symbol} {frame} shows close at C, high at H, low at L, indicating a bullish/bearish candle with close above/below the midpoint.' "
-        "Then write each SMC and Classic Indicator point as a clear bullet point with exact values from input, one per line, with a blank line after each bullet for spacing. No section headers, no markdown, no table, just clear concise bullets. "
-        "---"
-        "At the end, ALWAYS output these EXACT 5 lines, in this order (no skipping, no change, no translation, no table):\n"
-        "Type: Buy/Sell\nEntry: <value>\nTake Profit: <value>\nStop Loss: <value>\nReason: <one line only>"
-        "\nIf you cannot generate a full trade recommendation, write:\n"
-        "Type: None\nEntry: -\nTake Profit: -\nStop Loss: -\nReason: No clear signal."
-        f"\nData: {data_str}"
-    )
-    xai_url = "https://api.x.ai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
-    data = {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1800}
+# ===== جلب صورة الشارت =====
+def get_chart_image(symbol, timeframe):
     try:
-        res = session.post(xai_url, headers=headers, json=data, timeout=60)
-        res.raise_for_status()
-        result = res.json()["choices"][0]["message"]["content"]
-        print(f"xAI Time: {time.time() - start}s")
-        print("====== xAI Analysis ======")
-        print(result)
-        print("==========================")
-        sections = result.split('---')
-        bullets = [l.strip("•*- ") for l in sections[0].splitlines() if l.strip()]
-        main_analysis = "\n\n".join(
-            [line for line in bullets if line and not line.lower().startswith(
-                ("ict & smc", "classic indicator", "trade recommendation", "type", "entry", "take profit", "stop loss", "reason")
-            ) and "|" not in line and not line.startswith("-")]
+        url = "https://api.chart-img.com/v1/tradingview/advanced-chart"
+        params = {
+            "symbol": symbol,
+            "interval": timeframe,
+            "width": 1280,
+            "height": 720,
+            "theme": "dark",
+            "token": CHART_IMG_API_KEY
+        }
+        r = requests.get(url, params=params, timeout=30)
+        return r.json().get("url", "")
+    except Exception as e:
+        print(f"Chart Image Error: {e}")
+        return ""
+
+# ===== إرسال مع صورة =====
+def send_to_telegram_with_image(message, image_url):
+    try:
+        session.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": message[:4096], "parse_mode": "HTML"},
+            timeout=30
         )
-        rec_bullets = []
-        if len(sections) > 1:
-            rec_lines = [l.strip("•*- ") for l in sections[1].splitlines() if l.strip()]
-            for line in rec_lines:
-                if "|" in line or line.startswith("-"):
-                    continue
-                if any(key in line.lower() for key in ["type", "entry", "profit", "stop", "reason"]):
-                    rec_bullets.append(line)
-        rec_lookup = {'type': '', 'entry': '', 'take': '', 'stop': '', 'reason': ''}
-        for l in rec_bullets:
-            l2 = l.lower()
-            if 'type' in l2:
-                rec_lookup['type'] = l.split(':', 1)[-1].strip()
-            elif 'entry' in l2:
-                rec_lookup['entry'] = l.split(':', 1)[-1].strip()
-            elif 'profit' in l2:
-                rec_lookup['take'] = l.split(':', 1)[-1].strip()
-            elif 'stop' in l2:
-                rec_lookup['stop'] = l.split(':', 1)[-1].strip()
-            elif 'reason' in l2:
-                rec_lookup['reason'] = l.split(':', 1)[-1].strip()
-        if rec_lookup['type'] and rec_lookup['type'].lower() in ['buy', 'sell']:
-            rec_fmt = (
-                f"<b>🚦 التوصية التجارية</b>\n"
-                f"صفقة: <b>{'بيع' if 'sell' in rec_lookup['type'].lower() else 'شراء'}</b>\n"
-                f"نقاط الدخول: <b>{rec_lookup['entry']}</b>\n"
-                f"نقاط جني الأرباح: <b>{rec_lookup['take']}</b>\n"
-                f"الستوب لوز: <b>{rec_lookup['stop']}</b>\n"
-                f"السبب: {rec_lookup['reason']}"
+        if image_url:
+            session.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+                json={"chat_id": TELEGRAM_CHAT_ID, "photo": image_url},
+                timeout=30
             )
-        else:
-            rec_fmt = (
-                "<b>🚦 التوصية التجارية (غير موجودة)</b>\n"
-                "مافي توصية واضحة من xAI!\n"
-                "يرجى مراجعة التحليل فوق أو تحقق من الإعدادات."
-            )
-        return main_analysis, rec_fmt
     except Exception as e:
-        print(f"xAI Error: {str(e)} Time: {time.time() - start}s")
-        fallback = "<b>🚦 التوصية التجارية (خطأ)</b>\nمافي توصية بسبب مشكلة في الاتصال أو الاستجابة."
-        return "⚠️ xAI Error: fallback - يرجى مراجعة الاتصال أو البيانات.", fallback
+        print(f"Telegram Send Error: {e}")
 
-def send_to_telegram(message):
-    start = time.time()
-    send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        data = {'chat_id': TELEGRAM_CHAT_ID, 'text': message[:4096], 'parse_mode': 'HTML'}
-        res = requests.post(send_url, data=data, timeout=30)
-        res.raise_for_status()
-        print(f"Telegram Text Time: {time.time() - start}s")
-        return res.json()
-    except Exception as e:
-        print(f"Telegram Text Error: {str(e)} Time: {time.time() - start}s")
-        return "⚠️ Telegram Text Error"
+# ===== GPT-5 main =====
+def gpt5_analysis(symbol, timeframe, price_data):
+    prompt = f"""
+حلل {symbol} على فريم {timeframe} باستخدام SMC و ICT:
+- هيكل السوق
+- مناطق السيولة
+- BOS / CHoCH / FVG / OB
+- تحليل كلاسيكي: EMA / RSI / MACD
+- تحديد إذا الصفقة سكالب أو سوينغ
+البيانات:
+{price_data}
+"""
+    r = session.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={"model": "gpt-5", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1800}
+    )
+    return r.json()["choices"][0]["message"]["content"]
 
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"status": "ok", "msg": "API Live ✅"})
+# ===== GPT-5 nano =====
+def gpt5_recommendation(symbol, timeframe, price_data):
+    prompt = f"""
+اعطني توصية مباشرة لـ {symbol} على فريم {timeframe}:
+- نوع الصفقة (شراء / بيع)
+- نقطة الدخول
+- الهدف
+- وقف الخسارة
+- نسبة نجاح 95%+ وانعكاس أقل من 30 نقطة
+البيانات:
+{price_data}
+"""
+    r = session.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={"model": "gpt-5-nano", "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 1800}
+    )
+    return r.json()["choices"][0]["message"]["content"]
+
+# ===== xAI Grok =====
+def xai_analysis(symbol, timeframe, price_data):
+    prompt = f"""
+حلل {symbol} على فريم {timeframe} بدقة 95%+:
+- SMC/ICT: سيولة، BOS، CHoCH، FVG، OB، Premium/Discount
+- كلاسيكي: EMA / RSI / MACD
+- توصية نهائية (شراء أو بيع)
+البيانات:
+{price_data}
+"""
+    r = session.post(
+        "https://api.x.ai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {XAI_API_KEY}"},
+        json={"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1800}
+    )
+    return r.json()["choices"][0]["message"]["content"]
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -137,28 +139,21 @@ def webhook():
     tf = payload.get("TF") or payload.get("interval") or "1H"
     frame = f"{tf}m" if str(tf).isdigit() else tf
     data_str = json.dumps(payload, ensure_ascii=False)
-    msg_title = f"📊 <b>{symbol} {frame}</b>\n"
-
     payload_hash = hashlib.sha256(body.encode()).hexdigest()
     last = last_payloads.get(symbol, {'hash': '', 'time': 0})
     if payload_hash == last['hash'] and time.time() - last['time'] < 10:
-        print("Duplicate webhook ignored")
-        print(f"Webhook Response Time: {time.time() - start}s")
         return jsonify({"status": "ok", "msg": "Duplicate ignored"})
-
     last_payloads[symbol] = {'hash': payload_hash, 'time': time.time()}
-
-    def process_analysis():
-        main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
-        if main_analysis:
-            send_to_telegram(msg_title + main_analysis)
-        if rec_fmt:
-            send_to_telegram(rec_fmt)
-        print(f"Webhook Processing Time: {time.time() - start}s")
-
-    Thread(target=process_analysis).start()
-    print(f"Webhook Response Time: {time.time() - start}s")
-    return jsonify({"status": "ok", "msg": "Received and processing"})
+    def process_all():
+        chart_url = get_chart_image(symbol, frame)
+        analysis = gpt5_analysis(symbol, frame, data_str)
+        send_to_telegram_with_image(f"📊 <b>تحليل السوق ({symbol} - {frame})</b>\n{analysis}", chart_url)
+        recommendation = gpt5_recommendation(symbol, frame, data_str)
+        send_to_telegram_with_image(f"🎯 <b>توصية الصفقة ({symbol} - {frame})</b>\n{recommendation}", chart_url)
+        xai_result = xai_analysis(symbol, frame, data_str)
+        send_to_telegram_with_image(f"🤖 <b>تحليل xAI ({symbol} - {frame})</b>\n{xai_result}", chart_url)
+    Thread(target=process_all).start()
+    return jsonify({"status": "ok", "msg": "Processing"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)

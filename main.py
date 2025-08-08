@@ -11,6 +11,7 @@ import hashlib
 XAI_API_KEY = os.getenv("XAI_API_KEY")
 TELEGRAM_BOT_TOKEN = "7550573728:AAFnoaMmcnb7dAfC4B9Jz9FlopMpJPiJNxw"
 TELEGRAM_CHAT_ID = "715830182"
+CHART_IMG_KEY = "LnZgxkVoM2a8sGR5YyuVAatTy6uEnpRCf6u2srN0"  # مفتاحك هنا
 
 # retry setup
 session = requests.Session()
@@ -92,16 +93,33 @@ def get_xai_analysis(symbol, frame, data_str):
         return main_analysis, rec_fmt
     except Exception as e:
         print(f"xAI Error: {str(e)} Time: {time.time() - start}s")
-        fallback = "<b>🚦 التوصية التجارية (خطأ)</b>\nمافي توصية بسبب مشكلة في الاتصال أو الاستجابة."
+        fallback = "<b>🚦 التوصية التجارية (خطأ)</b>\nمافي توصية بسبب مشكلة في الاتصال أو الاستجابات."
         return "⚠️ xAI Error: fallback - يرجى مراجعة الاتصال أو البيانات.", fallback
 
-def send_to_telegram(message, image_url=None, is_photo=False):
+def get_chart_image(symbol, interval):
+    url = "https://api.chart-img.com/v1/tradingview/advanced-chart"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "apikey": CHART_IMG_KEY,
+        "theme": "dark",  # اختياري، غير لو تبي light
+        "width": 800,
+        "height": 600
+    }
+    try:
+        res = requests.get(url, params=params, timeout=10)
+        res.raise_for_status()
+        return res.content  # binary image
+    except Exception as e:
+        print(f"Chart Img Error: {str(e)}")
+        return None
+
+def send_to_telegram(message, image=None):
     start = time.time()
-    if is_photo and image_url and isinstance(image_url, str) and image_url.startswith('http'):
+    if image:
         send_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         try:
-            img = requests.get(image_url, timeout=10).content
-            files = {'photo': ('chart.png', img)}
+            files = {'photo': ('chart.png', image)}
             data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': message[:1024], 'parse_mode': 'HTML'}
             res = requests.post(send_url, data=data, files=files, timeout=30)
             res.raise_for_status()
@@ -151,9 +169,6 @@ def webhook():
     tf = payload.get("TF") or payload.get("interval") or "1H"
     frame = f"{tf}m" if str(tf).isdigit() else tf
     data_str = json.dumps(payload, ensure_ascii=False)
-    image_url = (
-        payload.get("snapshot_url") or payload.get("image_url") or payload.get("chart_image_url")
-    )
     msg_title = f"📊 <b>{symbol} {frame}</b>\n"
 
     payload_hash = hashlib.sha256(body.encode()).hexdigest()
@@ -167,10 +182,9 @@ def webhook():
 
     def process_analysis():
         main_analysis, rec_fmt = get_xai_analysis(symbol, frame, data_str)
+        image = get_chart_image(symbol, frame)  # سحب الصورة تلقائي
         if main_analysis:
-            send_to_telegram(msg_title + main_analysis)
-            if image_url:
-                send_to_telegram("🖼️ Chart Snapshot:", image_url, is_photo=True)
+            send_to_telegram(msg_title + main_analysis, image=image)
         if rec_fmt:
             send_to_telegram(rec_fmt)
         print(f"Webhook Processing Time: {time.time() - start}s")

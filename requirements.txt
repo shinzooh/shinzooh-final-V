@@ -1,3 +1,5 @@
-flask
-requests
+Flask
 gunicorn
+requests
+pytz
+apscheduler

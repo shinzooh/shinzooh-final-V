@@ -21,7 +21,8 @@ MODEL_OAI  = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 REQ_TIMEOUT = int(os.getenv("REQ_TIMEOUT", "20"))
 ANALYSIS_OVERALL_TIMEOUT = int(os.getenv("ANALYSIS_OVERALL_TIMEOUT", "22"))
 
-ALLOWED_TF = {"1D","4H","1H","15","5","15m","5m","60","240","D"}
+# ✅ فقط الفريمات المسموحة
+ALLOWED_TF = {"5", "15", "30", "1H", "4H", "1D"}
 
 # ========= HTTP session with retries =========
 def make_session():
@@ -65,9 +66,18 @@ def _parse_time_any(x):
 def normalize_tv(payload: Dict[str,Any]) -> Dict[str,Any]:
     symb = str(payload.get("SYMB","")).strip()
     exch = str(payload.get("EXCHANGE","")).strip()
-    tf   = str(payload.get("TF","")).strip()
-    tf_map = {"D":"1D","240":"4H","60":"1H","15m":"15","5m":"5"}
-    tf = tf_map.get(tf, tf)
+    tf_raw = str(payload.get("TF","")).strip()
+
+    # ✅ خريطة تحويل الفريمات
+    tf_map = {
+        "5": "5",
+        "15": "15",
+        "30": "30",
+        "60": "1H",
+        "240": "4H",
+        "D": "1D"
+    }
+    tf = tf_map.get(tf_raw, tf_raw)
     if tf not in ALLOWED_TF:
         raise ValueError(f"Unsupported TF: {tf or 'EMPTY'}")
 

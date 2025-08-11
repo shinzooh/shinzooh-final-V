@@ -1,4 +1,5 @@
 Flask
 gunicorn
 requests
-urllib3
+flask-limiter
+urllib3>=2.0

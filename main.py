@@ -73,7 +73,7 @@ _last_sent_keys = set()  # منع تكرار نفس (symbol+tf+bar_time)
 def _to_float(x) -> Optional[float]:
     try:
         s = str(x).strip()
-        if s == "" or s.startswith("{{"):
+        if s == "" or s.startswith("{{}"):
             return None
         return float(s.replace(",", ""))
     except:
@@ -106,7 +106,7 @@ def normalize_tf(tf_raw: str) -> str:
     return {"D":"1D","1D":"1D","4H":"4H","1H":"1H","30":"30","15":"15","5":"5"}.get(tf_raw, tf_raw)
 
 def parse_payload() -> Dict[str, str]:
-    """يدعم JSON أو صيغة key=value مفصولة بفواصل/أسطر."""
+    """يدعم JSON أو صيغة key=value."""
     raw = request.get_data(as_text=True) or ""
     body = request.get_json(silent=True)
     if isinstance(body, dict):
@@ -171,7 +171,6 @@ def session_decode(sv):
 
 # ========= Safe HTTP =========
 def safe_post(url, headers, json_body, timeout=(5, 30)):
-    """POST عبر session مع retries من الـ adapter."""
     try:
         r = session.post(url, headers=headers, json=json_body, timeout=timeout)
         if r.status_code in (429, 500, 502, 503, 504):
@@ -292,14 +291,12 @@ def consensus(xai_ok,xai_txt,oai_ok,oai_txt, close, atr, extras):
         allowed, note = mitigation_guard(extras, t, close, atr)
         if not allowed:
             return f"⚠️ لا صفقة: {note}"
-        # خذ أول توصية كاملة
         for _,tt,e,tp,sl,rsn in fields:
             if tt==t and e and tp and sl:
                 direction = "شراء" if t=="buy" else "بيع"
                 return (f"🚦 <b>التوصية النهائية (توافق 100%)</b>\n"
                         f"الصفقة: <b>{direction}</b>\nالدخول: <b>{e}</b>\n"
                         f"الهدف: <b>{tp}</b>\nالستوب: <b>{sl}</b>")
-        # أكمل عبر ATR
         e = fields[0][2] or fields[1][2] or (f"{close:.3f}" if close is not None else "-")
         tp,sl = fallback_targets(t, close, atr)
         direction = "شراء" if t=="buy" else "بيع"
@@ -333,24 +330,12 @@ Flags: BOS_UP={ex.get('BOS_UP')} BOS_DN={ex.get('BOS_DN')} CHOCH={ex.get('CHOCH'
 Constraint: confidence >= 95% and pullback <= 30 pips.
 """.strip()
 
-# ========= Routes =========
-@limiter.limit("120 per hour; 30 per minute")
-@app.post("/webhook")
-def webhook():
+# ========= Background processing =========
+def process_alert(n):
     try:
-        p = parse_payload()
-        n = normalize(p)
         sym, tf, bt = n["symbol"], n["tf"], n["bar_time"]
-        if not sym or tf not in ALLOWED_TF:
-            return jsonify({"status":"ignored"}), 200
-
-        # منع تكرار نفس الشمعة
-        key = f"{sym}|{tf}|{bt.isoformat()}"
-        if key in _last_sent_keys:
-            return jsonify({"status":"dup"}), 200
-        _last_sent_keys.add(key)
-
         o,h,l,c,v, ex = n["open"], n["high"], n["low"], n["close"], n["volume"], n["extras"]
+
         piv = compute_sr(h,l,c)
         PP = ex.get("PP") if ex.get("PP") is not None else piv["PP"]
         R1 = ex.get("R1") if ex.get("R1") is not None else piv["R1"]
@@ -381,7 +366,31 @@ def webhook():
         header = f"🪙 <b>{sym}</b> — <b>{tf}</b>\n🕒 {bt.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
         msg = f"{header}{sr_block}\n{xai_txt}\n\n{oai_txt}\n\n{final}"
         tg(msg)
-        return jsonify({"status":"ok"}), 200
+    except Exception as e:
+        log.exception("process_alert error")
+        tg(f"❌ <b>خطأ</b>\n{e}")
+
+# ========= Routes =========
+@limiter.limit("120 per hour; 30 per minute")
+@app.post("/webhook")
+def webhook():
+    try:
+        p = parse_payload()
+        n = normalize(p)
+
+        sym, tf, bt = n["symbol"], n["tf"], n["bar_time"]
+        if not sym or tf not in ALLOWED_TF:
+            return jsonify({"status":"ignored"}), 200
+
+        # منع تكرار نفس الشمعة
+        key = f"{sym}|{tf}|{bt.isoformat()}"
+        if key in _last_sent_keys:
+            return jsonify({"status":"dup"}), 200
+        _last_sent_keys.add(key)
+
+        # ✅ التحليل بالخلفية – رد فوري
+        threading.Thread(target=process_alert, args=(n,), daemon=True).start()
+        return jsonify({"status":"queued"}), 200
 
     except Exception as e:
         log.exception("Webhook error")

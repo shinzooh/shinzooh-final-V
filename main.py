@@ -1,34 +1,112 @@
 # -*- coding: utf-8 -*-
-import os, re, json, traceback, concurrent.futures
+import os, re, json, time, math, traceback, concurrent.futures, threading, logging
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 import requests
 from flask import Flask, request, jsonify
 
-# ===== ENV =====
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+# ========= ENV =========
 XAI_API_KEY        = os.getenv("XAI_API_KEY", "")
 OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+PORT               = int(os.getenv("PORT", "10000"))
 
-ALLOWED_TF = {"5","15","30","1H","4H","1D"}  # فقط هذي
+ALLOWED_TF = {"5","15","30","1H","4H","1D"}
 
+# ========= Flask & Logging =========
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("shinzooh")
 
-# ===== Telegram =====
-def tg(msg: str):
-    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID): return
+# Rate limit للويب هوك
+limiter = Limiter(key_func=get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
+
+# جلسة HTTP مع Retries (تشمل 429)
+session = requests.Session()
+retry = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=frozenset(["POST"])
+)
+adapter = HTTPAdapter(max_retries=retry)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
+
+# ========= Telegram =========
+_tg_lock = threading.Lock()
+_last_tg_ts = 0.0
+
+def tg(html: str):
+    """إرسال منسّق لتليجرام مع rate-limit داخلي."""
+    global _last_tg_ts
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+        log.info("Telegram not configured.")
+        return
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"},
-            timeout=15
-        )
-    except Exception as e:
-        print("Telegram error:", e)
+        with _tg_lock:
+            now = time.time()
+            wait = 1.5 - (now - _last_tg_ts)  # رسالة كل 1.5 ثانية كحد أدنى
+            if wait > 0:
+                time.sleep(wait)
+            _last_tg_ts = time.time()
 
-# ===== Parsing =====
+        r = session.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": html, "parse_mode": "HTML"},
+            timeout=(5, 30)
+        )
+        if r.status_code != 200:
+            log.warning("Telegram non-200: %s %s", r.status_code, r.text[:200])
+    except Exception:
+        log.exception("Telegram error")
+
+# ========= Helpers =========
+_last_sent_keys = set()  # منع تكرار نفس (symbol+tf+bar_time)
+
+def _to_float(x) -> Optional[float]:
+    try:
+        s = str(x).strip()
+        if s == "" or s.startswith("{{"):
+            return None
+        return float(s.replace(",", ""))
+    except:
+        try:
+            return float(s)
+        except:
+            return None
+
+def _parse_time_any(x) -> Optional[datetime]:
+    if x is None:
+        return None
+    s = str(x).strip()
+    if s.isdigit():
+        t = int(s)
+        if t > 1_000_000_000_000:
+            t //= 1000
+        return datetime.fromtimestamp(t, tz=timezone.utc)
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except:
+        return None
+
+def normalize_tf(tf_raw: str) -> str:
+    tf_raw = (tf_raw or "").strip()
+    if tf_raw.isdigit():
+        n = int(tf_raw)
+        if n < 5:
+            n = 5  # لا نسمح بأقل من 5m
+        return {"5":"5","15":"15","30":"30","60":"1H","240":"4H"}.get(str(n), str(n))
+    return {"D":"1D","1D":"1D","4H":"4H","1H":"1H","30":"30","15":"15","5":"5"}.get(tf_raw, tf_raw)
+
 def parse_payload() -> Dict[str, str]:
+    """يدعم JSON أو صيغة key=value مفصولة بفواصل/أسطر."""
     raw = request.get_data(as_text=True) or ""
     body = request.get_json(silent=True)
     if isinstance(body, dict):
@@ -38,268 +116,281 @@ def parse_payload() -> Dict[str, str]:
         if "=" in part:
             k, v = part.split("=", 1)
             out[k.strip()] = v.strip()
+    log.info("Raw Body (KV): %s", raw[:200])
     return out
 
-# ===== Helpers =====
-def _to_float(x) -> Optional[float]:
-    try:
-        return float(str(x).replace(",", ""))
-    except:
-        return None
+def normalize(p: Dict[str,str]) -> Dict[str, object]:
+    sym  = (p.get("SYMB") or p.get("symbol") or "").upper()
+    tf   = normalize_tf(p.get("TF") or p.get("interval") or "")
+    o = _to_float(p.get("OPEN") or p.get("O"))
+    h = _to_float(p.get("HIGH") or p.get("H"))
+    l = _to_float(p.get("LOW")  or p.get("L"))
+    c = _to_float(p.get("CLOSE")or p.get("C"))
+    v = _to_float(p.get("VOLUME")or p.get("V"))
+    bt = _parse_time_any(p.get("BAR_TIME") or p.get("time") or p.get("NOW")) or datetime.now(timezone.utc)
 
-def _parse_time_any(x) -> Optional[datetime]:
-    if x is None: return None
-    s = str(x).strip()
-    if s.isdigit():
-        t = int(s)
-        if t > 1_000_000_000_000: t //= 1000
-        return datetime.fromtimestamp(t, tz=timezone.utc)
-    try:
-        return datetime.fromisoformat(s.replace("Z","+00:00"))
-    except:
-        return None
-
-def normalize_tf(tf_raw: str) -> str:
-    tf_raw = (tf_raw or "").strip()
-    if tf_raw.isdigit():
-        n = int(tf_raw)
-        if n < 5: n = 5              # إصلاح 1 -> 5
-        return {"5":"5","15":"15","30":"30","60":"1H","240":"4H"}.get(str(n), str(n))
-    return {"D":"1D","1D":"1D","4H":"4H","1H":"1H","15":"15","30":"30","5":"5"}.get(tf_raw, tf_raw)
-
-def normalize(payload: Dict[str, str]) -> Dict[str, object]:
-    sym  = (payload.get("SYMB") or payload.get("symbol") or "").upper()
-    tf   = normalize_tf(payload.get("TF") or payload.get("interval") or "")
-    o = _to_float(payload.get("OPEN") or payload.get("O"))
-    h = _to_float(payload.get("HIGH") or payload.get("H"))
-    l = _to_float(payload.get("LOW")  or payload.get("L"))
-    c = _to_float(payload.get("CLOSE")or payload.get("C"))
-    v = _to_float(payload.get("VOLUME")or payload.get("V"))
-    bt = _parse_time_any(payload.get("BAR_TIME") or payload.get("time") or payload.get("BAR") or payload.get("NOW")) or datetime.now(timezone.utc)
-
-    # اختياري: قيم إضافية من Pine (لو وصلت)
-    extras = {
-        "PDH": _to_float(payload.get("PDH")), "PDL": _to_float(payload.get("PDL")), "PDC": _to_float(payload.get("PDC")),
-        "PWH": _to_float(payload.get("PWH")), "PWL": _to_float(payload.get("PWL")), "PWC": _to_float(payload.get("PWC")),
-        "PP": _to_float(payload.get("PP")), "R1": _to_float(payload.get("R1")), "S1": _to_float(payload.get("S1")),
-        "ATR14": _to_float(payload.get("ATR14")), "TR": _to_float(payload.get("TR")),
-        "RANGE_MID": _to_float(payload.get("RANGE_MID")),
-        "ZONE": payload.get("ZONE"),
-        "SESSION": payload.get("SESSION"),
-        "BOS_UP": _to_float(payload.get("BOS_UP")),
-        "BOS_DN": _to_float(payload.get("BOS_DN")),
-        "CHOCH": _to_float(payload.get("CHOCH")),
-        "SWEEP_PDH": _to_float(payload.get("SWEEP_PDH")),
-        "SWEEP_PDL": _to_float(payload.get("SWEEP_PDL")),
-        "BODY_PCT": _to_float(payload.get("BODY_PCT")),
-        "WICK_TOP_PCT": _to_float(payload.get("WICK_TOP_PCT")),
-        "WICK_BOT_PCT": _to_float(payload.get("WICK_BOT_PCT")),
+    ex = {
+        "PDH": _to_float(p.get("PDH")), "PDL": _to_float(p.get("PDL")), "PDC": _to_float(p.get("PDC")),
+        "PWH": _to_float(p.get("PWH")), "PWL": _to_float(p.get("PWL")), "PWC": _to_float(p.get("PWC")),
+        "PP": _to_float(p.get("PP")),   "R1": _to_float(p.get("R1")),   "S1": _to_float(p.get("S1")),
+        "ATR14": _to_float(p.get("ATR14")), "TR": _to_float(p.get("TR")),
+        "RANGE_MID": _to_float(p.get("RANGE_MID")),
+        "ZONE": (str(p.get("ZONE")).strip() if p.get("ZONE") is not None else None),
+        "SESSION": (str(p.get("SESSION")).strip() if p.get("SESSION") is not None else None),
+        "BOS_UP": _to_float(p.get("BOS_UP")), "BOS_DN": _to_float(p.get("BOS_DN")), "CHOCH": _to_float(p.get("CHOCH")),
+        "SWEEP_PDH": _to_float(p.get("SWEEP_PDH")), "SWEEP_PDL": _to_float(p.get("SWEEP_PDL")),
+        "BODY_PCT": _to_float(p.get("BODY_PCT")), "WICK_TOP_PCT": _to_float(p.get("WICK_TOP_PCT")), "WICK_BOT_PCT": _to_float(p.get("WICK_BOT_PCT")),
+        "CSD_UP": _to_float(p.get("CSD_UP")), "CSD_DN": _to_float(p.get("CSD_DN")),
+        "BULL_FVG_CE": _to_float(p.get("BULL_FVG_CE")), "BEAR_FVG_CE": _to_float(p.get("BEAR_FVG_CE")),
+        "DIST_BULL_CE": _to_float(p.get("DIST_BULL_CE")), "DIST_BEAR_CE": _to_float(p.get("DIST_BEAR_CE")),
     }
-    return {"symbol": sym, "tf": tf, "open": o, "high": h, "low": l, "close": c, "volume": v, "bar_time": bt, "extras": extras}
+    return {"symbol": sym, "tf": tf, "open": o, "high": h, "low": l, "close": c, "volume": v, "bar_time": bt, "extras": ex}
 
-# ===== Local S/R (fallback لو ما وصل من Pine) =====
-def compute_sr(o,h,l,c):
-    if any(v is None for v in (h,l,c)):  # نحتاج HLC
+def compute_sr(h,l,c):
+    if any(v is None for v in (h,l,c)):
         return {"PP":None,"R1":None,"S1":None}
-    pp  = (h + l + c) / 3.0
-    r1  = 2*pp - l
-    s1  = 2*pp - h
+    pp = (h+l+c)/3.0
+    r1 = 2*pp - l
+    s1 = 2*pp - h
     return {"PP":pp,"R1":r1,"S1":s1}
 
 def fmt_price(x): return "-" if x is None else f"{x:.3f}"
 
 def zone_decode(z):
     if z in (None,""): return "-"
-    s = str(z).strip()
+    s=str(z).strip()
     if s in ("1","Premium","premium"): return "Premium"
     if s in ("-1","Discount","discount"): return "Discount"
     if s in ("0","Mid","mid"): return "Mid"
     return s
 
 def session_decode(sv):
-    m = {"1":"Asia","2":"London","3":"NY","0":"Other"}
-    s = str(sv).strip() if sv is not None else ""
+    m={"1":"Asia","2":"London","3":"NY","0":"Other"}
+    s=str(sv).strip() if sv is not None else ""
     return m.get(s, sv if sv else "-")
 
-# ===== LLM Calls =====
-def ask_xai(prompt: str) -> str:
-    if not XAI_API_KEY: return "📡 <b>تحليل xAI</b>\n(لا يوجد مفتاح XAI)"
+# ========= Safe HTTP =========
+def safe_post(url, headers, json_body, timeout=(5, 30)):
+    """POST عبر session مع retries من الـ adapter."""
     try:
-        r = requests.post(
-            "https://api.x.ai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {XAI_API_KEY}"},
-            json={"model":"grok-4-0709","messages":[{"role":"user","content":prompt}],"temperature":0.2},
-            timeout=25
-        )
-        r.raise_for_status()
-        txt = r.json()["choices"][0]["message"]["content"].strip()
-        return f"📡 <b>تحليل xAI</b>\n{txt}"
+        r = session.post(url, headers=headers, json=json_body, timeout=timeout)
+        if r.status_code in (429, 500, 502, 503, 504):
+            raise requests.HTTPError(f"{r.status_code}: {r.text[:160]}")
+        return True, r.json()
     except Exception as e:
-        return f"📡 <b>تحليل xAI</b>\nخطأ: {e}"
+        return False, str(e)
 
-def ask_openai(prompt: str) -> str:
-    if not OPENAI_API_KEY: return "🤖 <b>تحليل OpenAI</b>\n(لا يوجد مفتاح OpenAI)"
+# ========= LLM =========
+def ask_xai(prompt: str):
+    if not XAI_API_KEY: return False, "تعذّر تحليل xAI (لا يوجد مفتاح)."
+    ok, res = safe_post(
+        "https://api.x.ai/v1/chat/completions",
+        {"Authorization": f"Bearer {XAI_API_KEY}"},
+        {"model":"grok-4-0709","messages":[{"role":"user","content":prompt}],"temperature":0.2}
+    )
+    if not ok: return False, f"تعذّر تحليل xAI ({res})"
     try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model":"gpt-4o-mini","messages":[{"role":"user","content":prompt}],"temperature":0.2},
-            timeout=25
-        )
-        r.raise_for_status()
-        txt = r.json()["choices"][0]["message"]["content"].strip()
-        return f"🤖 <b>تحليل OpenAI</b>\n{txt}"
-    except Exception as e:
-        return f"🤖 <b>تحليل OpenAI</b>\nخطأ: {e}"
+        txt = res["choices"][0]["message"]["content"].strip()
+        return True, f"📡 <b>تحليل xAI</b>\n{txt}"
+    except Exception:
+        return False, "تعذّر تحليل xAI (استجابة غير متوقعة)."
 
-# ===== Extract & Consensus =====
-def extract_fields(text: str) -> Tuple[Optional[str],Optional[str],Optional[str],Optional[str],Optional[str]]:
+def ask_openai(prompt: str):
+    if not OPENAI_API_KEY: return False, "تعذّر تحليل OpenAI (لا يوجد مفتاح)."
+    ok, res = safe_post(
+        "https://api.openai.com/v1/chat/completions",
+        {"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        {"model":"gpt-4o-mini","messages":[{"role":"user","content":prompt}],"temperature":0.2}
+    )
+    if not ok: return False, f"تعذّر تحليل OpenAI ({res})"
+    try:
+        txt = res["choices"][0]["message"]["content"].strip()
+        return True, f"🤖 <b>تحليل OpenAI</b>\n{txt}"
+    except Exception:
+        return False, "تعذّر تحليل OpenAI (استجابة غير متوقعة)."
+
+# ========= Extraction & Guards =========
+def extract_fields(text: str):
     t=e=tp=sl=rsn=None
     for line in text.splitlines():
         low=line.strip().lower()
         if low.startswith(("trade:","type:","صفقة:","الصفقة:")):
-            val=line.split(":",1)[-1].strip().lower()
-            if "buy" in val or "شراء" in val: t="buy"
-            elif "sell" in val or "بيع" in val: t="sell"
+            v=line.split(":",1)[-1].strip().lower()
+            if "buy" in v or "شراء" in v: t="buy"
+            elif "sell" in v or "بيع" in v: t="sell"
         elif low.startswith(("entry:","الدخول:","enter:")):       e=line.split(":",1)[-1].strip()
         elif low.startswith(("take profit:","tp:","جني","الهدف")): tp=line.split(":",1)[-1].strip()
         elif low.startswith(("stop loss:","sl:","ستوب","وقف")):    sl=line.split(":",1)[-1].strip()
         elif low.startswith(("reason:","سبب","السبب")):            rsn=line.split(":",1)[-1].strip()
     return t,e,tp,sl,rsn
 
-def fallback_targets(direction: str, close: Optional[float], atr: Optional[float]) -> Tuple[str,str]:
-    # لو ناقص TP/SL نستخدم ATR: TP≈1.5*ATR, SL≈0.8*ATR
+def fallback_targets(direction: str, close: Optional[float], atr: Optional[float]):
     if close is None or atr is None or atr <= 0:
-        return ("-", "-")
+        return "-", "-"
     if direction=="buy":
-        tp = close + 1.5*atr
-        sl = close - 0.8*atr
+        tp = close + 1.5*atr; sl = close - 0.8*atr
     else:
-        tp = close - 1.5*atr
-        sl = close + 0.8*atr
-    return (f"{tp:.3f}", f"{sl:.3f}")
+        tp = close - 1.5*atr; sl = close + 0.8*atr
+    return f"{tp:.3f}", f"{sl:.3f}"
 
-def consensus_block(xai_txt: str, oai_txt: str, close: Optional[float], atr: Optional[float]) -> str:
-    t1,e1,tp1,sl1,r1 = extract_fields(xai_txt)
-    t2,e2,tp2,sl2,r2 = extract_fields(oai_txt)
-    types=[t for t in (t1,t2) if t in ("buy","sell")]
-    if not types:
+def mitigation_guard(extras: dict, direction: str, close: Optional[float], atr: Optional[float]) -> Tuple[bool, str]:
+    """تأجيل/منع الصفقة لوجود CSD معاكس أو FVG غير مختبرة قريبة."""
+    atr_v = atr if (atr is not None and atr > 0) else None
+    near_mult = 0.6  # 60% من ATR
+
+    csd_up = (extras.get("CSD_UP") or 0) == 1.0
+    csd_dn = (extras.get("CSD_DN") or 0) == 1.0
+    if direction == "buy" and csd_dn:
+        return False, "CSD هبوطي ظاهر—تأجيل الشراء."
+    if direction == "sell" and csd_up:
+        return False, "CSD صعودي ظاهر—تأجيل البيع."
+
+    if close is None:
+        return True, ""
+
+    bear_ce = extras.get("BEAR_FVG_CE")
+    bull_ce = extras.get("BULL_FVG_CE")
+    dist_bear = extras.get("DIST_BEAR_CE")
+    dist_bull = extras.get("DIST_BULL_CE")
+
+    if direction == "buy" and bear_ce is not None:
+        if close < bear_ce and (atr_v is None or (dist_bear is not None and dist_bear <= near_mult*atr_v)):
+            return False, f"انتظار ميتيجيشن BEAR FVG عند CE≈{bear_ce:.3f}."
+    if direction == "sell" and bull_ce is not None:
+        if close > bull_ce and (atr_v is None or (dist_bull is not None and dist_bull <= near_mult*atr_v)):
+            return False, f"انتظار ميتيجيشن BULL FVG عند CE≈{bull_ce:.3f}."
+    return True, ""
+
+def consensus(xai_ok,xai_txt,oai_ok,oai_txt, close, atr, extras):
+    fields=[]
+    if xai_ok:
+        t,e,tp,sl,rsn = extract_fields(xai_txt);  fields.append(("xai",t,e,tp,sl,rsn))
+    if oai_ok:
+        t,e,tp,sl,rsn = extract_fields(oai_txt);  fields.append(("openai",t,e,tp,sl,rsn))
+    fields = [f for f in fields if f[1] in ("buy","sell")]
+
+    if not fields:
         return "⚠️ لا توجد توصية واضحة."
 
-    buy_pct=(types.count("buy")/len(types))*100.0
-    if buy_pct >= 95:
-        direction="شراء"; dir_en="buy"; conf=buy_pct
-        e,tp,sl,rsn= (e1,tp1,sl1,r1) if t1=="buy" else (e2,tp2,sl2,r2)
-    elif (100-buy_pct) >= 95:
-        direction="بيع"; dir_en="sell"; conf=100-buy_pct
-        e,tp,sl,rsn= (e1,tp1,sl1,r1) if t1=="sell" else (e2,tp2,sl2,r2)
+    if len(fields)==1:
+        src,t,e,tp,sl,rsn = fields[0]
+        allowed, note = mitigation_guard(extras, t, close, atr)
+        if not allowed:
+            return f"⚠️ لا صفقة: {note}"
+        if not (tp and sl):
+            tp,sl = fallback_targets(t, close, atr)
+        if not e: e = "-" if close is None else f"{close:.3f}"
+        direction = "شراء" if t=="buy" else "بيع"
+        return (f"🚦 <b>التوصية النهائية (مصدر واحد 95%)</b>\n"
+                f"الصفقة: <b>{direction}</b>\nالدخول: <b>{e}</b>\n"
+                f"الهدف: <b>{tp}</b>\nالستوب: <b>{sl}</b>")
+
+    # مصدران
+    t1=fields[0][1]; t2=fields[1][1]
+    if t1==t2:
+        t=t1
+        allowed, note = mitigation_guard(extras, t, close, atr)
+        if not allowed:
+            return f"⚠️ لا صفقة: {note}"
+        # خذ أول توصية كاملة
+        for _,tt,e,tp,sl,rsn in fields:
+            if tt==t and e and tp and sl:
+                direction = "شراء" if t=="buy" else "بيع"
+                return (f"🚦 <b>التوصية النهائية (توافق 100%)</b>\n"
+                        f"الصفقة: <b>{direction}</b>\nالدخول: <b>{e}</b>\n"
+                        f"الهدف: <b>{tp}</b>\nالستوب: <b>{sl}</b>")
+        # أكمل عبر ATR
+        e = fields[0][2] or fields[1][2] or (f"{close:.3f}" if close is not None else "-")
+        tp,sl = fallback_targets(t, close, atr)
+        direction = "شراء" if t=="buy" else "بيع"
+        return (f"🚦 <b>التوصية النهائية (توافق 100%)</b>\n"
+                f"الصفقة: <b>{direction}</b>\nالدخول: <b>{e}</b>\nالهدف: <b>{tp}</b>\nالستوب: <b>{sl}</b>")
     else:
-        return f"⚠️ تعارض بين xAI و OpenAI ({buy_pct:.1f}% شراء) — لا صفقة مؤكدة."
+        return "⚠️ تعارض بين xAI و OpenAI — لا صفقة مؤكدة."
 
-    # Fallback للأهداف/الستوب
-    if not tp or not sl:
-        tp, sl = fallback_targets(dir_en, close, atr)
-
-    if not e:  # لو ما في Entry، خذ الإغلاق الحالي كدخول تقريبي
-        e = "-" if close is None else f"{close:.3f}"
-
-    return (
-        f"🚦 <b>التوصية النهائية (توافق {conf:.1f}%)</b>\n"
-        f"الصفقة: <b>{direction}</b>\n"
-        f"الدخول: <b>{e}</b>\n"
-        f"الهدف: <b>{tp}</b>\n"
-        f"الستوب: <b>{sl}</b>\n"
-        f"السبب: {rsn or 'Confluence ICT/SMC + Classic & HTF context'}"
-    )
-
-# ===== Prompt =====
-def build_prompt(sym: str, tf: str, o,h,l,c,v, ex: Dict[str,object]) -> str:
+# ========= Prompt =========
+def build_prompt(sym, tf, o,h,l,c,v, ex):
     zone = zone_decode(ex.get("ZONE"))
     sess = session_decode(ex.get("SESSION"))
-    pivPP = ex.get("PP"); pivR1=ex.get("R1"); pivS1=ex.get("S1")
-    # لو ما وصل من Pine، احسب محلياً
-    if pivPP is None or pivR1 is None or pivS1 is None:
-        sr_local = compute_sr(o,h,l,c)
-        pivPP = pivPP if pivPP is not None else sr_local["PP"]
-        pivR1 = pivR1 if pivR1 is not None else sr_local["R1"]
-        pivS1 = pivS1 if pivS1 is not None else sr_local["S1"]
-
-    base = f"""
-Analyze {sym} on {tf} using ICT/SMC (Liquidity, BOS, CHoCH, FVG, OB, Premium/Discount) and classic TA (EMA/RSI/MACD).
-STRICT OUTPUT FORMAT:
+    piv  = compute_sr(h,l,c)
+    PP = ex.get("PP") if ex.get("PP") is not None else piv["PP"]
+    R1 = ex.get("R1") if ex.get("R1") is not None else piv["R1"]
+    S1 = ex.get("S1") if ex.get("S1") is not None else piv["S1"]
+    return f"""
+Analyze {sym} on {tf} using ICT/SMC (Liquidity, BOS, CHOCH, FVG, OB) and classic TA (EMA/RSI/MACD).
+STRICT FORMAT (English output is fine):
 Trade: Buy or Sell
 Entry: <number>
 Take Profit: <number>
 Stop Loss: <number>
 Reason: <one line>
-
 Data:
-OHLCV: O={o} H={h} L={l} C={c} V={v}
-HTF: PDH={ex.get('PDH')} PDL={ex.get('PDL')} PDC={ex.get('PDC')} | PWH={ex.get('PWH')} PWL={ex.get('PWL')} PWC={ex.get('PWC')}
-Pivots: PP={pivPP} R1={pivR1} S1={pivS1}
-ATR14={ex.get('ATR14')} TR={ex.get('TR')}
+O={o} H={h} L={l} C={c} V={v}
+PDH={ex.get('PDH')} PDL={ex.get('PDL')} PDC={ex.get('PDC')} | PWH={ex.get('PWH')} PWL={ex.get('PWL')} PWC={ex.get('PWC')}
+PP={PP} R1={R1} S1={S1} | ATR14={ex.get('ATR14')} TR={ex.get('TR')}
 RangeMid={ex.get('RANGE_MID')} Zone={zone} Session={sess}
-Struct: BOS_UP={ex.get('BOS_UP')} BOS_DN={ex.get('BOS_DN')} CHOCH={ex.get('CHOCH')}
-Sweeps: PDH={ex.get('SWEEP_PDH')} PDL={ex.get('SWEEP_PDL')}
-Candle: BODY%={ex.get('BODY_PCT')} WICK_TOP%={ex.get('WICK_TOP_PCT')} WICK_BOT%={ex.get('WICK_BOT_PCT')}
-Constraints: confidence >= 95% and pullback <= 30 pips.
-"""
-    return base.strip()
+Flags: BOS_UP={ex.get('BOS_UP')} BOS_DN={ex.get('BOS_DN')} CHOCH={ex.get('CHOCH')} SWEEP_PDH={ex.get('SWEEP_PDH')} SWEEP_PDL={ex.get('SWEEP_PDL')}
+Constraint: confidence >= 95% and pullback <= 30 pips.
+""".strip()
 
-# ===== Routes =====
+# ========= Routes =========
+@limiter.limit("120 per hour; 30 per minute")
 @app.post("/webhook")
 def webhook():
     try:
         p = parse_payload()
         n = normalize(p)
-
-        sym, tf = n["symbol"], n["tf"]
+        sym, tf, bt = n["symbol"], n["tf"], n["bar_time"]
         if not sym or tf not in ALLOWED_TF:
-            return jsonify({"status":"ignored","reason":"bad TF/symbol"}), 200
+            return jsonify({"status":"ignored"}), 200
 
-        o,h,l,c,v = n["open"], n["high"], n["low"], n["close"], n["volume"]
-        ex = n["extras"]  # قد تكون None لبعض القيم – ما في مشكلة
-        atr = ex.get("ATR14")
+        # منع تكرار نفس الشمعة
+        key = f"{sym}|{tf}|{bt.isoformat()}"
+        if key in _last_sent_keys:
+            return jsonify({"status":"dup"}), 200
+        _last_sent_keys.add(key)
 
-        # بلوك S/R ملون
-        sr_loc = compute_sr(o,h,l,c)
-        S1 = ex.get("S1") if ex.get("S1") is not None else sr_loc["S1"]
-        R1 = ex.get("R1") if ex.get("R1") is not None else sr_loc["R1"]
-        PP = ex.get("PP") if ex.get("PP") is not None else sr_loc["PP"]
+        o,h,l,c,v, ex = n["open"], n["high"], n["low"], n["close"], n["volume"], n["extras"]
+        piv = compute_sr(h,l,c)
+        PP = ex.get("PP") if ex.get("PP") is not None else piv["PP"]
+        R1 = ex.get("R1") if ex.get("R1") is not None else piv["R1"]
+        S1 = ex.get("S1") if ex.get("S1") is not None else piv["S1"]
         zone = zone_decode(ex.get("ZONE"))
         sess = session_decode(ex.get("SESSION"))
 
-        sr_block = (
-            f"📍 مستويات الدعم والمقاومة\n"
-            f"🟢 S1: {fmt_price(S1)}    🔴 R1: {fmt_price(R1)}\n"
-            f"⚖️ PP: {fmt_price(PP)}   •  Zone: {zone}  •  Session: {sess}\n"
-        )
+        sr_block = (f"📍 <b>مستويات الدعم والمقاومة</b>\n"
+                    f"🟢 S1: {fmt_price(S1)}   🔴 R1: {fmt_price(R1)}\n"
+                    f"⚖️ PP: {fmt_price(PP)}   •  Zone: {zone}  •  Session: {sess}\n")
 
         prompt = build_prompt(sym, tf, o,h,l,c,v, ex)
 
-        # شغّل النموذجين بالتوازي
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as exx:
             fx = exx.submit(ask_xai, prompt)
             fo = exx.submit(ask_openai, prompt)
-            xai_txt = fx.result(timeout=30)
-            oai_txt = fo.result(timeout=30)
+            xai_ok, xai_txt = fx.result(timeout=35)
+            oai_ok, oai_txt = fo.result(timeout=35)
 
-        final_rec = consensus_block(xai_txt, oai_txt, c, atr)
+        def clean_err(s: str) -> str:
+            return re.sub(r"https?://\S+", "", s)
 
-        header = f"📊 <b>{sym} — {tf}</b>\n🕒 {(n['bar_time']).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
-        body = f"{sr_block}\n{xai_txt}\n\n{oai_txt}\n\n{final_rec}"
-        tg(header + body)
+        if not xai_ok: xai_txt = f"📡 <b>تحليل xAI</b>\n{clean_err(xai_txt)}"
+        if not oai_ok: oai_txt = f"🤖 <b>تحليل OpenAI</b>\n{clean_err(oai_txt)}"
+
+        final = consensus(xai_ok, xai_txt, oai_ok, oai_txt, c, ex.get("ATR14"), ex)
+
+        header = f"🪙 <b>{sym}</b> — <b>{tf}</b>\n🕒 {bt.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+        msg = f"{header}{sr_block}\n{xai_txt}\n\n{oai_txt}\n\n{final}"
+        tg(msg)
         return jsonify({"status":"ok"}), 200
 
     except Exception as e:
-        traceback.print_exc()
+        log.exception("Webhook error")
         tg(f"❌ <b>خطأ</b>\n{e}")
-        return jsonify({"status":"ok","handled_error":str(e)}), 200  # نرجّع 200 حتى لا يعيد TV الإرسال
+        return jsonify({"status":"ok","handled_error":str(e)}), 200
 
 @app.get("/")
 def root():
     return jsonify({"ok":True,"service":"consensus-sr","ts":datetime.now(timezone.utc).isoformat()}),200
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=PORT)

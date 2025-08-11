@@ -1,94 +1,102 @@
 import os
-import time
 import requests
+import json
+import time
 from flask import Flask, request, jsonify
+
+# ====== إعدادات ======
+XAI_API_KEY = os.getenv("XAI_API_KEY")  # مفتاح xAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # مفتاح OpenAI (اختياري)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+MODEL_SOURCE = os.getenv("MODEL_SOURCE", "xai")  # xai أو openai
 
 app = Flask(__name__)
 
-# إعدادات البيئة
-XAI_API_KEY = os.getenv("XAI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# ====== إرسال Telegram ======
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Telegram Error: {e}")
 
-# الفريمات المسموحة فقط
-ALLOWED_TF = ["5", "15", "30", "60", "240", "1D"]
-
-# إرسال رسالة تليجرام مع صورة
-def send_telegram_message(text, image_url=None):
-    if image_url:
+# ====== تحليل بالنموذج ======
+def analyze_data(symbol, frame, data_str):
+    prefix = "[تحليل xAI]" if MODEL_SOURCE.lower() == "xai" else "[تحليل OpenAI]"
+    prompt = f"""{prefix}
+حلل {symbol} على فريم {frame} بأسلوب ICT & SMC (سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع)
++ كلاسيكي (EMA/MA/RSI/MACD).
+أعطني توصية شراء/بيع مع (دخول/هدف/ستوب) بنسبة نجاح 95%+ وانعكاس لا يتعدى 30 نقطة.
+البيانات: {data_str}
+"""
+    if MODEL_SOURCE.lower() == "xai":
+        url = "https://api.x.ai/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
         payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "caption": text,
-            "photo": image_url,
-            "parse_mode": "HTML"
+            "model": "grok-2-latest",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3
         }
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     else:
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
         payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML"
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3
         }
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    
-    requests.post(url, json=payload)
 
-# تحليل xAI
-def get_xai_analysis(symbol, frame, data_str):
-    prompt = f"[xAI Analysis]\nحلل {symbol} على {frame} ICT & SMC دقة 95%+: سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع. كلاسيكي: EMA/MA/RSI/MACD (95%+). توصية شراء/بيع: دخول/هدف/ستوب (95%+ نجاح, max 30 نقطة انعكاس). بيانات: {data_str}"
-    url = "https://api.x.ai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {XAI_API_KEY}"}
-    payload = {
-        "model": "grok-2-latest",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    return r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=30)
+        r.raise_for_status()
+        resp = r.json()
+        if MODEL_SOURCE.lower() == "xai":
+            return resp["choices"][0]["message"]["content"]
+        else:
+            return resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"{prefix} خطأ في التحليل: {e}"
 
-# تحليل OpenAI
-def get_openai_analysis(symbol, frame, data_str):
-    prompt = f"[OpenAI Analysis]\nحلل {symbol} على {frame} بنفس أسلوب xAI مع تفاصيل ICT/SMC + EMA/MA/RSI/MACD وتوصية دقيقة"
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
-    payload = {
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    return r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-
-# Webhook استقبال TradingView
+# ====== استقبال TradingView ======
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    body = request.get_json()
-    symbol = body.get("SYMB")
-    tf = body.get("TF")
-    data_str = ",".join([f"{k}={v}" for k, v in body.items() if k not in ["SYMB", "TF"]])
-
-    if tf not in ALLOWED_TF:
-        return jsonify({"status": "ignored", "reason": "TF not allowed"})
-
-    # رابط snapshot
-    snapshot_url = f"https://www.tradingview.com/x/{symbol}_{tf}_snapshot.png"
-
-    # تحليل xAI
     try:
-        analysis_xai = get_xai_analysis(symbol, tf, data_str)
-        send_telegram_message(analysis_xai, snapshot_url)
-    except Exception as e:
-        send_telegram_message(f"[xAI Error] {str(e)}")
+        raw = request.data.decode("utf-8").strip()
+        print("RAW:", raw)
 
-    # تحليل OpenAI
-    try:
-        analysis_openai = get_openai_analysis(symbol, tf, data_str)
-        send_telegram_message(analysis_openai, snapshot_url)
-    except Exception as e:
-        send_telegram_message(f"[OpenAI Error] {str(e)}")
+        # تحويل البيانات إلى dict
+        parts = raw.split(",")
+        data = {}
+        for p in parts:
+            if "=" in p:
+                k, v = p.split("=", 1)
+                data[k.strip()] = v.strip()
 
-    return jsonify({"status": "ok"})
+        # التحقق من البيانات الأساسية
+        required_keys = ["SYMB", "TF", "O", "H", "L", "C"]
+        for key in required_keys:
+            if key not in data or not data[key]:
+                print(f"تحذير: {key} ناقص أو فاضي")
+                data[key] = "N/A"
+
+        # تجهيز البيانات للنموذج
+        symbol = data.get("SYMB", "N/A")
+        frame = data.get("TF", "N/A")
+        data_str = json.dumps(data, ensure_ascii=False)
+
+        # تحليل
+        analysis = analyze_data(symbol, frame, data_str)
+
+        # إرسال
+        send_telegram(analysis)
+        return jsonify({"status": "ok", "msg": "تم التحليل"}), 200
+
+    except Exception as e:
+        print("Error:", e)
+        return jsonify({"status": "error", "msg": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)

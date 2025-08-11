@@ -1,102 +1,77 @@
 import os
 import requests
-import json
-import time
 from flask import Flask, request, jsonify
-
-# ====== إعدادات ======
-XAI_API_KEY = os.getenv("XAI_API_KEY")  # مفتاح xAI
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # مفتاح OpenAI (اختياري)
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-MODEL_SOURCE = os.getenv("MODEL_SOURCE", "xai")  # xai أو openai
+import time
 
 app = Flask(__name__)
 
-# ====== إرسال Telegram ======
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Telegram Error: {e}")
+# ============ قراءة من .env ============
+MODEL_SOURCE_XAI = os.getenv("MODEL_SOURCE_XAI", "xai")
+MODEL_SOURCE_OPENAI = os.getenv("MODEL_SOURCE_OPENAI", "openai")
+XAI_API_KEY = os.getenv("XAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# ====== تحليل بالنموذج ======
-def analyze_data(symbol, frame, data_str):
-    prefix = "[تحليل xAI]" if MODEL_SOURCE.lower() == "xai" else "[تحليل OpenAI]"
-    prompt = f"""{prefix}
-حلل {symbol} على فريم {frame} بأسلوب ICT & SMC (سيولة/BOS/CHoCH/FVG/OB/Premium/Discount/شموع)
-+ كلاسيكي (EMA/MA/RSI/MACD).
-أعطني توصية شراء/بيع مع (دخول/هدف/ستوب) بنسبة نجاح 95%+ وانعكاس لا يتعدى 30 نقطة.
-البيانات: {data_str}
-"""
-    if MODEL_SOURCE.lower() == "xai":
-        url = "https://api.x.ai/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"}
-        payload = {
-            "model": "grok-2-latest",
-            "messages": [{"role": "user", "content": prompt}],
+# ============ دوال الموديلات ============
+def analyze_xai(symbol, frame, data_str):
+    prompt = f"تحليل {symbol} ({frame}) باستخدام {MODEL_SOURCE_XAI}: ICT/SMC + RSI + EMA + MACD. توصية دخول/هدف/ستوب بدقة 95%."
+    headers = {"Authorization": f"Bearer {XAI_API_KEY}"}
+    resp = requests.post(
+        "https://api.x.ai/v1/chat/completions",
+        json={
+            "model": "grok-4-0709",
+            "messages": [{"role": "user", "content": prompt + "\nبيانات: " + data_str}],
             "temperature": 0.3
-        }
-    else:
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-        payload = {
+        },
+        headers=headers,
+        timeout=60
+    )
+    return "تحليل xAI 📊\n" + resp.json().get("choices", [{}])[0].get("message", {}).get("content", "خطأ في التحليل")
+
+def analyze_openai(symbol, frame, data_str):
+    prompt = f"تحليل {symbol} ({frame}) باستخدام {MODEL_SOURCE_OPENAI}: ICT/SMC + RSI + EMA + MACD. توصية دخول/هدف/ستوب بدقة 95%."
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+    resp = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": prompt + "\nبيانات: " + data_str}],
             "temperature": 0.3
-        }
+        },
+        headers=headers,
+        timeout=60
+    )
+    return "تحليل OpenAI 🤖\n" + resp.json().get("choices", [{}])[0].get("message", {}).get("content", "خطأ في التحليل")
 
-    try:
-        r = requests.post(url, json=payload, headers=headers, timeout=30)
-        r.raise_for_status()
-        resp = r.json()
-        if MODEL_SOURCE.lower() == "xai":
-            return resp["choices"][0]["message"]["content"]
-        else:
-            return resp["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"{prefix} خطأ في التحليل: {e}"
+# ============ إرسال تليجرام ============
+def send_telegram(msg):
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    )
 
-# ====== استقبال TradingView ======
+# ============ Webhook ============
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        raw = request.data.decode("utf-8").strip()
-        print("RAW:", raw)
+        data = request.get_json(force=True)
+        symbol = data.get("SYMB", "Unknown")
+        frame = data.get("TF", "Unknown")
+        data_str = ",".join(f"{k}={v}" for k, v in data.items())
 
-        # تحويل البيانات إلى dict
-        parts = raw.split(",")
-        data = {}
-        for p in parts:
-            if "=" in p:
-                k, v = p.split("=", 1)
-                data[k.strip()] = v.strip()
+        # تحليل xAI
+        xai_result = analyze_xai(symbol, frame, data_str)
+        send_telegram(xai_result)
 
-        # التحقق من البيانات الأساسية
-        required_keys = ["SYMB", "TF", "O", "H", "L", "C"]
-        for key in required_keys:
-            if key not in data or not data[key]:
-                print(f"تحذير: {key} ناقص أو فاضي")
-                data[key] = "N/A"
+        # تحليل OpenAI
+        openai_result = analyze_openai(symbol, frame, data_str)
+        send_telegram(openai_result)
 
-        # تجهيز البيانات للنموذج
-        symbol = data.get("SYMB", "N/A")
-        frame = data.get("TF", "N/A")
-        data_str = json.dumps(data, ensure_ascii=False)
-
-        # تحليل
-        analysis = analyze_data(symbol, frame, data_str)
-
-        # إرسال
-        send_telegram(analysis)
-        return jsonify({"status": "ok", "msg": "تم التحليل"}), 200
-
+        return jsonify({"status": "ok", "msg": "تحليلات أُرسلت"})
     except Exception as e:
-        print("Error:", e)
-        return jsonify({"status": "error", "msg": str(e)}), 500
+        return jsonify({"status": "error", "error": str(e)}), 500
 
+# ============ تشغيل ============
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))

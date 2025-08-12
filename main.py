@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import os, re, json, time, math, traceback, concurrent.futures, threading, logging
+import os, re, html, json, time, math, traceback, concurrent.futures, threading, logging
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 import requests
@@ -24,8 +24,13 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("shinzooh")
 
-# Rate limit للويب هوك
-limiter = Limiter(key_func=get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
+# Rate limit للويبهوك (بدون تحذير التخزين)
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    storage_uri=os.getenv("RATELIMIT_STORAGE_URI", "memory://"),
+    default_limits=["200 per day", "50 per hour"]
+)
 
 # جلسة HTTP مع Retries (تشمل 429)
 session = requests.Session()
@@ -43,8 +48,8 @@ session.mount("http://", adapter)
 _tg_lock = threading.Lock()
 _last_tg_ts = 0.0
 
-def tg(html: str):
-    """إرسال منسّق لتليجرام مع rate-limit داخلي."""
+def tg(html_text: str):
+    """إرسال منسّق لتليجرام مع rate-limit داخلي + تهريب HTML."""
     global _last_tg_ts
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         log.info("Telegram not configured.")
@@ -52,14 +57,14 @@ def tg(html: str):
     try:
         with _tg_lock:
             now = time.time()
-            wait = 1.5 - (now - _last_tg_ts)  # رسالة كل 1.5 ثانية كحد أدنى
+            wait = 1.5 - (now - _last_tg_ts)  # رسالة كل 1.5 ثانية
             if wait > 0:
                 time.sleep(wait)
             _last_tg_ts = time.time()
 
         r = session.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": html, "parse_mode": "HTML"},
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": html_text, "parse_mode": "HTML"},
             timeout=(5, 30)
         )
         if r.status_code != 200:
@@ -68,19 +73,20 @@ def tg(html: str):
         log.exception("Telegram error")
 
 # ========= Helpers =========
-_last_sent_keys = set()  # منع تكرار نفس (symbol+tf+bar_time)
+_last_sent_keys = set()  # منع تكرار نفس (symbol|tf|bar_time)
+
+def esc(s: str) -> str:
+    # نهرب < و > و & فقط، بدون المساس بعلامات الاقتباس
+    return html.escape(s or "", quote=False)
 
 def _to_float(x) -> Optional[float]:
     try:
         s = str(x).strip()
-        if s == "" or s.startswith("{{}"):
+        if s == "" or s.startswith("{{"):
             return None
         return float(s.replace(",", ""))
     except:
-        try:
-            return float(s)
-        except:
-            return None
+        return None
 
 def _parse_time_any(x) -> Optional[datetime]:
     if x is None:
@@ -127,7 +133,11 @@ def normalize(p: Dict[str,str]) -> Dict[str, object]:
     l = _to_float(p.get("LOW")  or p.get("L"))
     c = _to_float(p.get("CLOSE")or p.get("C"))
     v = _to_float(p.get("VOLUME")or p.get("V"))
-    bt = _parse_time_any(p.get("BAR_TIME") or p.get("time") or p.get("NOW")) or datetime.now(timezone.utc)
+    # ثبّت الدقيقة لو ما في BAR_TIME
+    bt = _parse_time_any(p.get("BAR_TIME") or p.get("time"))
+    if bt is None:
+        bt = _parse_time_any(p.get("NOW")) or datetime.now(timezone.utc)
+        bt = bt.replace(second=0, microsecond=0)
 
     ex = {
         "PDH": _to_float(p.get("PDH")), "PDL": _to_float(p.get("PDL")), "PDC": _to_float(p.get("PDC")),
@@ -190,7 +200,7 @@ def ask_xai(prompt: str):
     if not ok: return False, f"تعذّر تحليل xAI ({res})"
     try:
         txt = res["choices"][0]["message"]["content"].strip()
-        return True, f"📡 <b>تحليل xAI</b>\n{txt}"
+        return True, txt
     except Exception:
         return False, "تعذّر تحليل xAI (استجابة غير متوقعة)."
 
@@ -204,7 +214,7 @@ def ask_openai(prompt: str):
     if not ok: return False, f"تعذّر تحليل OpenAI ({res})"
     try:
         txt = res["choices"][0]["message"]["content"].strip()
-        return True, f"🤖 <b>تحليل OpenAI</b>\n{txt}"
+        return True, txt
     except Exception:
         return False, "تعذّر تحليل OpenAI (استجابة غير متوقعة)."
 
@@ -315,7 +325,7 @@ def build_prompt(sym, tf, o,h,l,c,v, ex):
     S1 = ex.get("S1") if ex.get("S1") is not None else piv["S1"]
     return f"""
 Analyze {sym} on {tf} using ICT/SMC (Liquidity, BOS, CHOCH, FVG, OB) and classic TA (EMA/RSI/MACD).
-STRICT FORMAT (English output is fine):
+STRICT FORMAT:
 Trade: Buy or Sell
 Entry: <number>
 Take Profit: <number>
@@ -352,23 +362,31 @@ def process_alert(n):
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as exx:
             fx = exx.submit(ask_xai, prompt)
             fo = exx.submit(ask_openai, prompt)
-            xai_ok, xai_txt = fx.result(timeout=35)
-            oai_ok, oai_txt = fo.result(timeout=35)
+            xai_ok, xai_raw = fx.result(timeout=35)
+            oai_ok, oai_raw = fo.result(timeout=35)
 
         def clean_err(s: str) -> str:
-            return re.sub(r"https?://\S+", "", s)
+            return re.sub(r"https?://\S+", "", s or "")
 
-        if not xai_ok: xai_txt = f"📡 <b>تحليل xAI</b>\n{clean_err(xai_txt)}"
-        if not oai_ok: oai_txt = f"🤖 <b>تحليل OpenAI</b>\n{clean_err(oai_txt)}"
+        # تهريب وحفظ المصدر
+        if xai_ok:
+            xai_txt = f"📡 <b>تحليل xAI</b>\n<pre>{esc(xai_raw)}</pre>"
+        else:
+            xai_txt = f"📡 <b>تحليل xAI</b>\n<pre>{esc(clean_err(xai_raw))}</pre>"
 
-        final = consensus(xai_ok, xai_txt, oai_ok, oai_txt, c, ex.get("ATR14"), ex)
+        if oai_ok:
+            oai_txt = f"🤖 <b>تحليل OpenAI</b>\n<pre>{esc(oai_raw)}</pre>"
+        else:
+            oai_txt = f"🤖 <b>تحليل OpenAI</b>\n<pre>{esc(clean_err(oai_raw))}</pre>"
 
-        header = f"🪙 <b>{sym}</b> — <b>{tf}</b>\n🕒 {bt.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+        final = consensus(xai_ok, xai_raw, oai_ok, oai_raw, c, ex.get("ATR14"), ex)
+
+        header = f"🪙 <b>{esc(sym)}</b> — <b>{esc(tf)}</b>\n🕒 {bt.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
         msg = f"{header}{sr_block}\n{xai_txt}\n\n{oai_txt}\n\n{final}"
         tg(msg)
     except Exception as e:
         log.exception("process_alert error")
-        tg(f"❌ <b>خطأ</b>\n{e}")
+        tg(f"❌ <b>خطأ</b>\n{esc(str(e))}")
 
 # ========= Routes =========
 @limiter.limit("120 per hour; 30 per minute")
@@ -394,7 +412,7 @@ def webhook():
 
     except Exception as e:
         log.exception("Webhook error")
-        tg(f"❌ <b>خطأ</b>\n{e}")
+        tg(f"❌ <b>خطأ</b>\n{esc(str(e))}")
         return jsonify({"status":"ok","handled_error":str(e)}), 200
 
 @app.get("/")

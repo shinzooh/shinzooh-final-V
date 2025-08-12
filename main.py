@@ -17,6 +17,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 PORT               = int(os.getenv("PORT", "10000"))
 
+# نسمح فقط بهذه الفريمات
 ALLOWED_TF = {"5","15","30","1H","4H","1D"}
 
 # ========= Flask & Logging =========
@@ -82,7 +83,7 @@ def esc(s: str) -> str:
 def _to_float(x) -> Optional[float]:
     try:
         s = str(x).strip()
-        if s == "" or s.startswith("{{"):
+        if s == "" or s.startswith("{{}"):
             return None
         return float(s.replace(",", ""))
     except:
@@ -189,7 +190,19 @@ def safe_post(url, headers, json_body, timeout=(5, 30)):
     except Exception as e:
         return False, str(e)
 
-# ========= LLM =========
+# ========= LLM (نفرض عربي 100%) =========
+AR_PROMPT_HEADER = (
+    "حلّل الأداة التالية بأسلوب ICT/SMC (السيولة، BOS، CHOCH، FVG، OB) مع التحليل الكلاسيكي (EMA/RSI/MACD). "
+    "أجب بالعربية الفصحى فقط وبصيغة منظمة. \n"
+    "التزم بالنموذج التالي حرفيًا:\n"
+    "الصفقة: شراء أو بيع\n"
+    "الدخول: رقم واحد\n"
+    "الهدف: رقم واحد\n"
+    "الستوب: رقم واحد\n"
+    "السبب: سطر واحد واضح\n"
+    "شرط: الثقة ≥ 95% والانعكاس المسموح ≤ 30 نقطة.\n"
+)
+
 def ask_xai(prompt: str):
     if not XAI_API_KEY: return False, "تعذّر تحليل xAI (لا يوجد مفتاح)."
     ok, res = safe_post(
@@ -220,17 +233,19 @@ def ask_openai(prompt: str):
 
 # ========= Extraction & Guards =========
 def extract_fields(text: str):
+    """نلتقط بالعربي أولاً، ونقبل الإنجليزية لو تسللت."""
     t=e=tp=sl=rsn=None
     for line in text.splitlines():
         low=line.strip().lower()
-        if low.startswith(("trade:","type:","صفقة:","الصفقة:")):
+        # نوع الصفقة
+        if low.startswith(("الصفقة:","صفقة:","trade:","type:")):
             v=line.split(":",1)[-1].strip().lower()
             if "buy" in v or "شراء" in v: t="buy"
             elif "sell" in v or "بيع" in v: t="sell"
-        elif low.startswith(("entry:","الدخول:","enter:")):       e=line.split(":",1)[-1].strip()
-        elif low.startswith(("take profit:","tp:","جني","الهدف")): tp=line.split(":",1)[-1].strip()
-        elif low.startswith(("stop loss:","sl:","ستوب","وقف")):    sl=line.split(":",1)[-1].strip()
-        elif low.startswith(("reason:","سبب","السبب")):            rsn=line.split(":",1)[-1].strip()
+        elif low.startswith(("الدخول:","entry:","enter:")):        e=line.split(":",1)[-1].strip()
+        elif low.startswith(("الهدف:","take profit:","tp:","جني")): tp=line.split(":",1)[-1].strip()
+        elif low.startswith(("الستوب:","stop loss:","sl:","وقف")):  sl=line.split(":",1)[-1].strip()
+        elif low.startswith(("السبب:","reason:","سبب")):            rsn=line.split(":",1)[-1].strip()
     return t,e,tp,sl,rsn
 
 def fallback_targets(direction: str, close: Optional[float], atr: Optional[float]):
@@ -243,16 +258,28 @@ def fallback_targets(direction: str, close: Optional[float], atr: Optional[float
     return f"{tp:.3f}", f"{sl:.3f}"
 
 def mitigation_guard(extras: dict, direction: str, close: Optional[float], atr: Optional[float]) -> Tuple[bool, str]:
-    """تأجيل/منع الصفقة لوجود CSD معاكس أو FVG غير مختبرة قريبة."""
+    """
+    حساسية عالية:
+    - منع الصفقة عند وجود CSD معاكس.
+    - منع الصفقة إذا وُجد FVG غير مختبرة قريبة (<= 0.8 ATR) باتجاه معاكس.
+    - منع الصفقة لو حدث Sweep ضد الاتجاه (PDH لصفقة شراء، PDL لصفقة بيع).
+    """
     atr_v = atr if (atr is not None and atr > 0) else None
-    near_mult = 0.6  # 60% من ATR
+    near_mult = 0.8  # حساسية عالية: 80% من ATR
 
     csd_up = (extras.get("CSD_UP") or 0) == 1.0
     csd_dn = (extras.get("CSD_DN") or 0) == 1.0
     if direction == "buy" and csd_dn:
-        return False, "CSD هبوطي ظاهر—تأجيل الشراء."
+        return False, "CSD هبوطي ظاهر — تأجيل الشراء."
     if direction == "sell" and csd_up:
-        return False, "CSD صعودي ظاهر—تأجيل البيع."
+        return False, "CSD صعودي ظاهر — تأجيل البيع."
+
+    sweep_pdh = (extras.get("SWEEP_PDH") or 0) == 1.0
+    sweep_pdl = (extras.get("SWEEP_PDL") or 0) == 1.0
+    if direction == "buy" and sweep_pdh:
+        return False, "تم اصطياد سيولة PDH — احتمالية انعكاس هابط."
+    if direction == "sell" and sweep_pdl:
+        return False, "تم اصطياد سيولة PDL — احتمالية انعكاس صاعد."
 
     if close is None:
         return True, ""
@@ -264,10 +291,11 @@ def mitigation_guard(extras: dict, direction: str, close: Optional[float], atr: 
 
     if direction == "buy" and bear_ce is not None:
         if close < bear_ce and (atr_v is None or (dist_bear is not None and dist_bear <= near_mult*atr_v)):
-            return False, f"انتظار ميتيجيشن BEAR FVG عند CE≈{bear_ce:.3f}."
+            return False, f"انتظار ميتيجيشن فجوة هابطة (BEAR FVG) عند CE≈{bear_ce:.3f}."
     if direction == "sell" and bull_ce is not None:
         if close > bull_ce and (atr_v is None or (dist_bull is not None and dist_bull <= near_mult*atr_v)):
-            return False, f"انتظار ميتيجيشن BULL FVG عند CE≈{bull_ce:.3f}."
+            return False, f"انتظار ميتيجيشن فجوة صاعدة (BULL FVG) عند CE≈{bull_ce:.3f}."
+
     return True, ""
 
 def consensus(xai_ok,xai_txt,oai_ok,oai_txt, close, atr, extras):
@@ -281,6 +309,7 @@ def consensus(xai_ok,xai_txt,oai_ok,oai_txt, close, atr, extras):
     if not fields:
         return "⚠️ لا توجد توصية واضحة."
 
+    # لو مصدر واحد
     if len(fields)==1:
         src,t,e,tp,sl,rsn = fields[0]
         allowed, note = mitigation_guard(extras, t, close, atr)
@@ -315,29 +344,23 @@ def consensus(xai_ok,xai_txt,oai_ok,oai_txt, close, atr, extras):
     else:
         return "⚠️ تعارض بين xAI و OpenAI — لا صفقة مؤكدة."
 
-# ========= Prompt =========
+# ========= Arabic prompt =========
 def build_prompt(sym, tf, o,h,l,c,v, ex):
-    zone = zone_decode(ex.get("ZONE"))
-    sess = session_decode(ex.get("SESSION"))
     piv  = compute_sr(h,l,c)
     PP = ex.get("PP") if ex.get("PP") is not None else piv["PP"]
     R1 = ex.get("R1") if ex.get("R1") is not None else piv["R1"]
     S1 = ex.get("S1") if ex.get("S1") is not None else piv["S1"]
+    zone = zone_decode(ex.get("ZONE"))
+    sess = session_decode(ex.get("SESSION"))
     return f"""
-Analyze {sym} on {tf} using ICT/SMC (Liquidity, BOS, CHOCH, FVG, OB) and classic TA (EMA/RSI/MACD).
-STRICT FORMAT:
-Trade: Buy or Sell
-Entry: <number>
-Take Profit: <number>
-Stop Loss: <number>
-Reason: <one line>
-Data:
+{AR_PROMPT_HEADER}
+البيانات:
 O={o} H={h} L={l} C={c} V={v}
 PDH={ex.get('PDH')} PDL={ex.get('PDL')} PDC={ex.get('PDC')} | PWH={ex.get('PWH')} PWL={ex.get('PWL')} PWC={ex.get('PWC')}
 PP={PP} R1={R1} S1={S1} | ATR14={ex.get('ATR14')} TR={ex.get('TR')}
-RangeMid={ex.get('RANGE_MID')} Zone={zone} Session={sess}
-Flags: BOS_UP={ex.get('BOS_UP')} BOS_DN={ex.get('BOS_DN')} CHOCH={ex.get('CHOCH')} SWEEP_PDH={ex.get('SWEEP_PDH')} SWEEP_PDL={ex.get('SWEEP_PDL')}
-Constraint: confidence >= 95% and pullback <= 30 pips.
+منتصف المدى={ex.get('RANGE_MID')} • المنطقة={zone} • الجلسة={sess}
+أعلام: BOS_UP={ex.get('BOS_UP')} BOS_DN={ex.get('BOS_DN')} CHOCH={ex.get('CHOCH')} SWEEP_PDH={ex.get('SWEEP_PDH')} SWEEP_PDL={ex.get('SWEEP_PDL')}
+أداة التحليل: {sym} — إطار: {tf}
 """.strip()
 
 # ========= Background processing =========
@@ -355,7 +378,7 @@ def process_alert(n):
 
         sr_block = (f"📍 <b>مستويات الدعم والمقاومة</b>\n"
                     f"🟢 S1: {fmt_price(S1)}   🔴 R1: {fmt_price(R1)}\n"
-                    f"⚖️ PP: {fmt_price(PP)}   •  Zone: {zone}  •  Session: {sess}\n")
+                    f"⚖️ PP: {fmt_price(PP)}   •  المنطقة: {zone}  •  الجلسة: {sess}\n")
 
         prompt = build_prompt(sym, tf, o,h,l,c,v, ex)
 
@@ -368,7 +391,7 @@ def process_alert(n):
         def clean_err(s: str) -> str:
             return re.sub(r"https?://\S+", "", s or "")
 
-        # تهريب وحفظ المصدر
+        # تهريب وحفظ المصدر (التحليل داخل <pre>، عناوين عربي)
         if xai_ok:
             xai_txt = f"📡 <b>تحليل xAI</b>\n<pre>{esc(xai_raw)}</pre>"
         else:
@@ -417,7 +440,7 @@ def webhook():
 
 @app.get("/")
 def root():
-    return jsonify({"ok":True,"service":"consensus-sr","ts":datetime.now(timezone.utc).isoformat()}),200
+    return jsonify({"ok":True,"service":"consensus-sr-ar","ts":datetime.now(timezone.utc).isoformat()}),200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)

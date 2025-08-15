@@ -194,11 +194,12 @@ async def process_alert(raw_text: str):
         print("[INFO] Missing essentials, skip.")
         return
     # فلترة متقدمة لدقة 10000%
-    if n["RSI"] is not None and (n["RSI"] < 40 or n["RSI"] > 60):
-        print("[INFO] RSI out of range (40-60), skip.")
+    if n["RSI"] and (n["RSI"] < 40 or n["RSI"] > 70):
+        print("[INFO] RSI out of range (40-70), skip.")
         return
-    if n["MACD"] is not None and n["MACD"] < -0.5:
-        print("[INFO] MACD too negative, skip.")
+    if n["MACD"] and n["MACD"] < -0.2:
+        print("[INFO] MACD negative, skip.")
+        return
     if n["BULL_FVG_CE"] and n["BEAR_FVG_CE"] and abs(n["BULL_FVG_CE"] - n["C"]) < 0.1 and abs(n["BEAR_FVG_CE"] - n["C"]) < 0.1:
         print("[INFO] Conflicting FVG, skip.")
         return
@@ -248,9 +249,9 @@ async def process_alert(raw_text: str):
             reversal = abs(float(entry) - float(sl)) if "buy" in final_dir else abs(float(tp) - float(entry))
             if reversal > 30:
                 final_rec["reason"] = "انعكاس > 30 نقطة — إلغاء الصفقة."
-            elif n["RSI"] and (n["RSI"] < 40 or n["RSI"] > 70):  # فلتر إضافي
+            elif n["RSI"] and (n["RSI"] < 40 or n["RSI"] > 70):
                 final_rec["reason"] = "RSI خارج النطاق (40-70) — إلغاء الصفقة."
-            elif n["MACD"] and n["MACD"] < -0.2:  # فلتر MACD
+            elif n["MACD"] and n["MACD"] < -0.2:
                 final_rec["reason"] = "MACD سلبي قوي — إلغاء الصفقة."
             else:
                 final_rec = {

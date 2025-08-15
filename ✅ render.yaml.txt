@@ -1,17 +1,17 @@
-startCommand: gunicorn main:app --workers 2 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT
 services:
   - type: web
     name: shinzooh-final-v
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT
+    buildCommand: pip install -r requirements.txt --no-cache-dir
+    startCommand: gunicorn -w 2 -k uvicorn.workers.UvicornWorker main:app -t 120 -b 0.0.0.0:$PORT
     envVars:
-      - key: TELEGRAM_TOKEN
+      - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
-      - key: PORT
-        value: 10000
-
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: XAI_API_KEY
+        sync: false
 

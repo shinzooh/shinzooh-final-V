@@ -4,11 +4,12 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# متغيرات البيئة
+# ==================== إعدادات البيئة ====================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")  # جديد - مفتاح Claude
 PORT = int(os.getenv("PORT", "10000"))
 
 # إعداد session للطلبات HTTP مع إعادة المحاولة
@@ -18,8 +19,13 @@ session.mount("https://", HTTPAdapter(max_retries=retries))
 session.mount("http://", HTTPAdapter(max_retries=retries))
 
 # إنشاء تطبيق FastAPI
-app = FastAPI()
+app = FastAPI(
+    title="Shinzooh Trading Bot Enhanced",
+    description="بوت تداول ذكي مع ثلاثي الذكاء الاصطناعي: OpenAI + xAI + Claude",
+    version="2.0.0"
+)
 
+# ==================== الدوال المساعدة ====================
 def now_str():
     """إرجاع الوقت الحالي كنص"""
     return datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -51,60 +57,60 @@ def parse_kv(raw: str) -> dict:
     return d
 
 def build_prompt_ar(n: dict) -> str:
-    """بناء prompt للتحليل باللغة العربية"""
+    """بناء prompt للتحليل باللغة العربية - محسن"""
     sym, tf = n.get("SYMB",""), n.get("TF","")
     O,H,L,C,V = n.get("O"),n.get("H"),n.get("L"),n.get("C"),n.get("V")
     RSI,EMA,MACD = n.get("RSI"),n.get("EMA"),n.get("MACD")
     bull_ce, bear_ce = n.get("BULL_FVG_CE"), n.get("BEAR_FVG_CE")
     csd_up, csd_dn = n.get("CSD_UP"), n.get("CSD_DN")
     
-    return f"""حلّل زوج {sym} على فريم {tf} بأسلوب ICT/SMC بدقة عالية:
-- المستويات: Liquidity / BOS / CHoCH / FVG / Order Block / Premium-Discount
-- إشارات SMC من البيانات: CSD_UP={csd_up}, CSD_DN={csd_dn}, BullFVG_CE={bull_ce}, BearFVG_CE={bear_ce}
-- التحليل الكلاسيكي: RSI={RSI}, EMA={EMA}, MACD={MACD}
-- بيانات الشمعة: O={O}, H={H}, L={L}, C={C}, V={V}
+    return f"""أنت محلل تقني خبير متخصص في ICT/SMC والتحليل الكلاسيكي.
 
-أعطني مخرجات مرتبة بالعربي بهذا الشكل فقط:
-تحليل {sym} ({tf}) بأسلوب ICT/SMC + كلاسيكي:
-1) السيولة (Liquidity): …
-2) الكسر/الهيكل (BOS/CHoCH): …
-3) فجوات القيمة (FVG) وكتل الأوامر (OB): …
-4) Premium/Discount: …
-5) كلاسيكي (RSI/EMA/MACD): …
+حلّل زوج {sym} على إطار {tf} بدقة عالية:
+
+📊 بيانات السعر:
+- Open: {O}, High: {H}, Low: {L}, Close: {C}
+- Volume: {V}
+
+📈 المؤشرات الكلاسيكية:
+- RSI: {RSI}
+- EMA: {EMA} 
+- MACD: {MACD}
+
+🎯 إشارات ICT/SMC:
+- CSD_UP: {csd_up} (إشارة شراء)
+- CSD_DN: {csd_dn} (إشارة بيع)
+- Bull FVG CE: {bull_ce} (فجوة قيمة صاعدة)
+- Bear FVG CE: {bear_ce} (فجوة قيمة هابطة)
+
+المطلوب تحليل شامل يشمل:
+1) تحليل السيولة والـ Liquidity zones
+2) تحديد BOS/CHoCH وتغيير الهيكل
+3) تحليل FVG وOrder Blocks
+4) تحديد Premium/Discount zones
+5) تقييم المؤشرات الكلاسيكية
+
+أعطني النتيجة بهذا التنسيق الدقيق:
+
+تحليل {sym} ({tf}) - تحليل متقدم:
+1) السيولة (Liquidity): [تحليلك هنا]
+2) الكسر/الهيكل (BOS/CHoCH): [تحليلك هنا]
+3) فجوات القيمة (FVG) وكتل الأوامر (OB): [تحليلك هنا]
+4) Premium/Discount: [تحليلك هنا]
+5) كلاسيكي (RSI/EMA/MACD): [تحليلك هنا]
 
 التوصية النهائية:
 - الصفقة: شراء أو بيع أو لا صفقة
-- الدخول: رقم واحد (سعر)
-- جني الأرباح: رقم واحد
-- وقف الخسارة: رقم واحد
-- السبب: سطر واحد واضح (مثال: BOS صاعد + CSD شراء + فوق EMA + لا توجد FVG هابطة غير مختبرة قريبة)
+- الدخول: [رقم واحد فقط]
+- جني الأرباح: [رقم واحد فقط]
+- وقف الخسارة: [رقم واحد فقط]
+- السبب: [سطر واحد واضح ومختصر]
 - شرط: الانعكاس الأقصى ≤ 30 نقطة
 
-التزم بالتنسيق حرفيًا، أرقام صريحة بدون زخرفة."""
+التزم بالتنسيق بدقة، أرقام صريحة بدون رموز أو زخرفة."""
 
-def ask_xai(prompt: str, timeout=22):
-    """استدعاء xAI API"""
-    if not XAI_API_KEY:
-        return False, "xAI API key missing"
-    try:
-        r = session.post(
-            "https://api.x.ai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "grok-4-latest",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "max_tokens": 1000
-            },
-            timeout=timeout
-        )
-        r.raise_for_status()
-        txt = r.json()["choices"][0]["message"]["content"]
-        return True, txt
-    except Exception as e:
-        return False, f"xAI error: {e}"
-
-def ask_openai(prompt: str, timeout=22):
+# ==================== دوال الذكاء الاصطناعي ====================
+def ask_openai(prompt: str, timeout=25):
     """استدعاء OpenAI API"""
     if not OPENAI_API_KEY:
         return False, "OpenAI API key missing"
@@ -115,8 +121,8 @@ def ask_openai(prompt: str, timeout=22):
             json={
                 "model": "gpt-4o-mini",
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "max_tokens": 1000
+                "temperature": 0.1,
+                "max_tokens": 1200
             },
             timeout=timeout
         )
@@ -126,65 +132,206 @@ def ask_openai(prompt: str, timeout=22):
     except Exception as e:
         return False, f"OpenAI error: {e}"
 
+def ask_xai(prompt: str, timeout=25):
+    """استدعاء xAI API"""
+    if not XAI_API_KEY:
+        return False, "xAI API key missing"
+    try:
+        r = session.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "grok-4-latest",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": 1200
+            },
+            timeout=timeout
+        )
+        r.raise_for_status()
+        txt = r.json()["choices"][0]["message"]["content"]
+        return True, txt
+    except Exception as e:
+        return False, f"xAI error: {e}"
+
+def ask_claude(prompt: str, timeout=25):
+    """استدعاء Claude API - الجديد والمحسن"""
+    if not CLAUDE_API_KEY:
+        return False, "Claude API key missing"
+    try:
+        r = session.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Authorization": f"Bearer {CLAUDE_API_KEY}",
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01"
+            },
+            json={
+                "model": "claude-3-haiku-20240307",  # الأسرع والأرخص
+                "max_tokens": 1200,
+                "temperature": 0.1,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=timeout
+        )
+        r.raise_for_status()
+        txt = r.json()["content"][0]["text"]
+        return True, txt
+    except Exception as e:
+        return False, f"Claude error: {e}"
+
+# ==================== تحليل النتائج ====================
 def extract_trade_fields(text: str):
-    """استخراج حقول التوصية من النص"""
+    """استخراج حقول التوصية من النص - محسن"""
     if not text:
         return {}
     
     def grab(pattern):
-        m = re.search(pattern, text, re.IGNORECASE)
+        m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         return m.group(1).strip() if m else ""
     
+    # أنماط محسنة للاستخراج
     dirn = grab(r"الصفقة\s*:\s*([^\n\r]+)")
-    entry= grab(r"الدخول\s*:\s*([0-9\.]+)")  # فقط أرقام
-    tp = grab(r"جني\s*الأرباح\s*:\s*([0-9\.]+)")
-    sl = grab(r"وقف\s*الخسارة\s*:\s*([0-9\.]+)")
+    entry = grab(r"الدخول\s*:\s*([0-9]+\.?[0-9]*)")
+    tp = grab(r"جني\s*الأرباح\s*:\s*([0-9]+\.?[0-9]*)")
+    sl = grab(r"وقف\s*الخسارة\s*:\s*([0-9]+\.?[0-9]*)")
     reason = grab(r"السبب\s*:\s*([^\n\r]+)")
     
-    return {"direction": dirn, "entry": entry, "tp": tp, "sl": sl, "reason": reason}
+    return {
+        "direction": dirn,
+        "entry": entry,
+        "tp": tp,
+        "sl": sl,
+        "reason": reason
+    }
 
-def consensus(rec_a: dict, rec_b: dict):
-    """تحديد الإجماع بين التوصيتين"""
-    def norm_dir(d):
+def consensus_triple(rec_openai: dict, rec_xai: dict, rec_claude: dict):
+    """تحديد الإجماع بين ثلاث توصيات - محسن ومطور"""
+    def normalize_direction(d):
         s = (d or "").strip().lower()
-        if "شراء" in s or "buy" in s:
+        if any(word in s for word in ["شراء", "buy", "صاعد", "long"]):
             return "buy"
-        if "بيع" in s or "sell" in s:
+        if any(word in s for word in ["بيع", "sell", "هابط", "short"]):
             return "sell"
+        if any(word in s for word in ["لا صفقة", "no trade", "انتظار", "wait"]):
+            return "wait"
         return ""
     
-    da = norm_dir(rec_a.get("direction", ""))
-    db = norm_dir(rec_b.get("direction", ""))
+    # تطبيع الاتجاهات
+    dir_openai = normalize_direction(rec_openai.get("direction", ""))
+    dir_xai = normalize_direction(rec_xai.get("direction", ""))
+    dir_claude = normalize_direction(rec_claude.get("direction", ""))
     
-    if da and db and da == db:
-        return True, da
-    if da and not db:
-        return True, da
-    if db and not da:
-        return True, db
-    return False, ""
+    # حساب الأصوات
+    directions = [dir_openai, dir_xai, dir_claude]
+    valid_directions = [d for d in directions if d and d != "wait"]
+    
+    if not valid_directions:
+        return False, "", "لا توجد توصيات واضحة"
+    
+    # إجماع ثلاثي (الأقوى)
+    if len(set(valid_directions)) == 1 and len(valid_directions) == 3:
+        return True, valid_directions[0], "إجماع ثلاثي مطلق 🎯"
+    
+    # إجماع ثنائي
+    from collections import Counter
+    vote_count = Counter(valid_directions)
+    most_common = vote_count.most_common(1)[0]
+    
+    if most_common[1] >= 2:
+        # تحديد مصدر الإجماع
+        sources = []
+        if dir_openai == most_common[0]: sources.append("OpenAI")
+        if dir_xai == most_common[0]: sources.append("xAI") 
+        if dir_claude == most_common[0]: sources.append("Claude")
+        
+        consensus_type = f"إجماع ثنائي ({' + '.join(sources)}) 🤝"
+        return True, most_common[0], consensus_type
+    
+    # لا إجماع
+    return False, "", f"تعارض: OpenAI({dir_openai}) xAI({dir_xai}) Claude({dir_claude}) ⚠️"
 
+def pick_best_recommendation(rec_openai: dict, rec_xai: dict, rec_claude: dict, agreed_direction: str):
+    """اختيار أفضل توصية من الثلاث - محسن"""
+    candidates = []
+    
+    # فحص كل توصية
+    for name, rec in [("OpenAI", rec_openai), ("xAI", rec_xai), ("Claude", rec_claude)]:
+        if (rec.get("entry") and rec.get("tp") and rec.get("sl") and 
+            rec.get("direction", "").lower().find(agreed_direction) != -1):
+            
+            try:
+                entry = float(rec["entry"])
+                tp = float(rec["tp"])
+                sl = float(rec["sl"])
+                
+                # حساب نسبة المخاطرة/العائد
+                if agreed_direction == "buy":
+                    risk = abs(entry - sl)
+                    reward = abs(tp - entry)
+                else:
+                    risk = abs(sl - entry)
+                    reward = abs(entry - tp)
+                
+                rr_ratio = reward / risk if risk > 0 else 0
+                
+                candidates.append({
+                    "source": name,
+                    "rec": rec,
+                    "rr_ratio": rr_ratio,
+                    "entry": entry,
+                    "tp": tp,
+                    "sl": sl
+                })
+            except:
+                continue
+    
+    if not candidates:
+        # إذا لم توجد توصيات كاملة، اختر أي واحدة بها اتجاه صحيح
+        for name, rec in [("OpenAI", rec_openai), ("xAI", rec_xai), ("Claude", rec_claude)]:
+            if rec.get("direction", "").lower().find(agreed_direction) != -1:
+                return rec, name
+        return rec_openai, "OpenAI"  # fallback
+    
+    # اختيار الأفضل حسب نسبة المخاطرة/العائد
+    best = max(candidates, key=lambda x: x["rr_ratio"])
+    return best["rec"], best["source"]
+
+# ==================== Telegram ====================
 def tgsend(text: str):
-    """إرسال رسالة عبر Telegram"""
+    """إرسال رسالة عبر Telegram - محسن"""
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         print("[WARN] Telegram env missing, skip send.")
-        return
+        return False
+    
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        session.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=12)
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }
+        response = session.post(url, json=payload, timeout=15)
+        response.raise_for_status()
+        return True
     except Exception as e:
-        print("[WARN] Telegram send error:", e)
+        print(f"[ERROR] Telegram send failed: {e}")
+        return False
 
-# منع التكرار
+# ==================== منع التكرار ====================
 _last_send = {}
 MIN_GAP_SEC = 5
 
+# ==================== المعالج الرئيسي ====================
 async def process_alert(raw_text: str):
-    """معالجة التنبيه الواردة من TradingView"""
+    """معالجة التنبيه الواردة من TradingView - محسن مع ثلاثي الذكاء الاصطناعي"""
+    
+    # تحليل البيانات الواردة
     kv = parse_kv(raw_text)
     n = {
-        "SYMB": kv.get("SYMB",""),
-        "TF": kv.get("TF",""),
+        "SYMB": kv.get("SYMB", ""),
+        "TF": kv.get("TF", ""),
         "O": _to_float_safe(kv.get("O") or kv.get("OPEN")),
         "H": _to_float_safe(kv.get("H") or kv.get("HIGH")),
         "L": _to_float_safe(kv.get("L") or kv.get("LOW")),
@@ -197,8 +344,6 @@ async def process_alert(raw_text: str):
         "CSD_DN": _to_float_safe(kv.get("CSD_DN")),
         "BULL_FVG_CE": _to_float_safe(kv.get("BULL_FVG_CE")),
         "BEAR_FVG_CE": _to_float_safe(kv.get("BEAR_FVG_CE")),
-        "DIST_BULL_CE": _to_float_safe(kv.get("DIST_BULL_CE")),
-        "DIST_BEAR_CE": _to_float_safe(kv.get("DIST_BEAR_CE")),
     }
     
     sym, tf = n["SYMB"], n["TF"]
@@ -207,132 +352,244 @@ async def process_alert(raw_text: str):
     
     # منع التكرار
     if key in _last_send and (now_sec - _last_send[key]) < MIN_GAP_SEC:
-        print("[INFO] Skip duplicate burst.")
+        print(f"[INFO] Skip duplicate for {key}")
         return
     _last_send[key] = now_sec
     
     # التحقق من البيانات الأساسية
     if not sym or not tf or n["C"] is None:
-        print("[INFO] Missing essentials, skip.")
+        print("[INFO] Missing essential data, skipping")
         return
     
-    # بناء prompt وإرساله للذكاء الاصطناعي
+    print(f"[INFO] Processing alert for {sym} {tf}")
+    
+    # بناء prompt وإرساله للذكاء الاصطناعي الثلاثي
     prompt = build_prompt_ar(n)
     loop = asyncio.get_event_loop()
     
-    # استدعاء كلا من xAI و OpenAI بشكل متوازي
-    ok_xai, txt_xai = await loop.run_in_executor(None, ask_xai, prompt)
-    ok_oai, txt_oai = await loop.run_in_executor(None, ask_openai, prompt)
+    # استدعاء الثلاثة بشكل متوازي
+    print("[INFO] Calling AI services...")
+    tasks = [
+        loop.run_in_executor(None, ask_openai, prompt),
+        loop.run_in_executor(None, ask_xai, prompt),
+        loop.run_in_executor(None, ask_claude, prompt)
+    ]
+    
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # معالجة النتائج
+    ok_openai, txt_openai = results[0] if not isinstance(results[0], Exception) else (False, str(results[0]))
+    ok_xai, txt_xai = results[1] if not isinstance(results[1], Exception) else (False, str(results[1]))
+    ok_claude, txt_claude = results[2] if not isinstance(results[2], Exception) else (False, str(results[2]))
+    
+    print(f"[INFO] AI Results - OpenAI: {ok_openai}, xAI: {ok_xai}, Claude: {ok_claude}")
     
     # استخراج التوصيات
+    rec_openai = extract_trade_fields(txt_openai if ok_openai else "")
     rec_xai = extract_trade_fields(txt_xai if ok_xai else "")
-    rec_oai = extract_trade_fields(txt_oai if ok_oai else "")
+    rec_claude = extract_trade_fields(txt_claude if ok_claude else "")
     
     # تحديد الإجماع
-    agreed, final_dir = consensus(rec_xai, rec_oai)
+    agreed, final_direction, consensus_type = consensus_triple(rec_openai, rec_xai, rec_claude)
     
-    # بناء معلومات إضافية
-    rsi_note = f"RSI={n['RSI']}" if n["RSI"] is not None else "RSI=na"
-    ema_note = f"EMA={n['EMA']}" if n["EMA"] is not None else "EMA=na"
-    macd_note = f"MACD={n['MACD']}" if n["MACD"] is not None else "MACD=na"
-    fvg_note = f"FVG: bullCE={n['BULL_FVG_CE']}, bearCE={n['BEAR_FVG_CE']}"
-    csd_note = f"CSD: up={n['CSD_UP']}, dn={n['CSD_DN']}"
+    # إحصائيات الذكاء الاصطناعي
+    ai_status = []
+    if ok_openai: ai_status.append("✅ OpenAI")
+    else: ai_status.append("❌ OpenAI")
+    
+    if ok_xai: ai_status.append("✅ xAI")
+    else: ai_status.append("❌ xAI")
+    
+    if ok_claude: ai_status.append("✅ Claude")
+    else: ai_status.append("❌ Claude")
     
     # بناء رسالة التحليل
-    header = f"{sym} {tf}\nTV: O={n['O']} H={n['H']} L={n['L']} C={n['C']}\n"
-    analysis_body = (
-        f"تحليل {sym} ({tf}) بأسلوب ICT/SMC + كلاسيكي:\n"
-        f"1) السيولة (Liquidity): حسب مستويات الشمعة.\n"
-        f"2) الكسر/الهيكل (BOS/CHoCH): [مستوى من البيانات].\n"
-        f"3) فجوات القيمة (FVG) وكتل الأوامر (OB): {fvg_note}.\n"
-        f"4) Premium/Discount: [مستوى من البيانات].\n"
-        f"5) كلاسيكي (RSI/EMA/MACD): {rsi_note}, {ema_note}, {macd_note}.\n"
-    )
+    header = f"<b>📊 {sym} {tf}</b>\n"
+    header += f"<b>🤖 الذكاء الاصطناعي:</b> {' | '.join(ai_status)}\n"
+    header += f"<b>📈 البيانات:</b> O={n['O']} H={n['H']} L={n['L']} C={n['C']}\n"
     
-    msg_analysis = header + "\n" + analysis_body
+    # معلومات إضافية
+    indicators = []
+    if n["RSI"] is not None: indicators.append(f"RSI={n['RSI']:.1f}")
+    if n["EMA"] is not None: indicators.append(f"EMA={n['EMA']:.2f}")
+    if n["MACD"] is not None: indicators.append(f"MACD={n['MACD']:.3f}")
     
-    # إضافة تحليل مفصل إذا توفر
-    if txt_xai and "تحليل" in txt_xai:
-        cut = txt_xai.split("التوصية النهائية:")[0].strip()
-        if cut:
-            msg_analysis += "\n" + cut
-    elif txt_oai and "تحليل" in txt_oai:
-        cut = txt_oai.split("التوصية النهائية:")[0].strip()
-        if cut:
-            msg_analysis += "\n" + cut
+    if indicators:
+        header += f"<b>📊 المؤشرات:</b> {' | '.join(indicators)}\n"
+    
+    # معلومات SMC
+    smc_info = []
+    if n["CSD_UP"] is not None: smc_info.append(f"CSD_UP={n['CSD_UP']:.2f}")
+    if n["CSD_DN"] is not None: smc_info.append(f"CSD_DN={n['CSD_DN']:.2f}")
+    if n["BULL_FVG_CE"] is not None: smc_info.append(f"Bull_FVG={n['BULL_FVG_CE']:.2f}")
+    if n["BEAR_FVG_CE"] is not None: smc_info.append(f"Bear_FVG={n['BEAR_FVG_CE']:.2f}")
+    
+    if smc_info:
+        header += f"<b>🎯 SMC:</b> {' | '.join(smc_info)}\n"
+    
+    header += f"<b>🔍 الإجماع:</b> {consensus_type}\n"
+    header += "─" * 30
+    
+    # إرسال رسالة التحليل
+    tgsend(header)
+    await asyncio.sleep(0.5)
     
     # بناء التوصية النهائية
-    final_rec = {"direction": "لا صفقة", "entry": "", "tp": "", "sl": "", "reason": ""}
+    final_rec = {
+        "direction": "لا صفقة",
+        "entry": "",
+        "tp": "",
+        "sl": "",
+        "reason": consensus_type
+    }
     
-    def pick_best(a, b):
-        """اختيار أفضل توصية"""
-        for r in (a, b):
-            if r.get("entry") and r.get("tp") and r.get("sl"):
-                return r
-        return a if a.get("direction") else b
-    
-    if agreed and final_dir:
-        chosen = pick_best(rec_xai, rec_oai)
-        entry, tp, sl = _to_float_safe(chosen.get("entry")), _to_float_safe(chosen.get("tp")), _to_float_safe(chosen.get("sl"))
+    if agreed and final_direction in ["buy", "sell"]:
+        # اختيار أفضل توصية
+        chosen_rec, chosen_source = pick_best_recommendation(rec_openai, rec_xai, rec_claude, final_direction)
+        
+        entry = _to_float_safe(chosen_rec.get("entry"))
+        tp = _to_float_safe(chosen_rec.get("tp"))
+        sl = _to_float_safe(chosen_rec.get("sl"))
         
         if entry and tp and sl:
             # حساب الانعكاس
-            reversal = abs(float(entry) - float(sl)) if "buy" in final_dir else abs(float(tp) - float(entry))
+            if final_direction == "buy":
+                reversal = abs(entry - sl)
+                reward = abs(tp - entry)
+            else:
+                reversal = abs(sl - entry)
+                reward = abs(entry - tp)
             
-            # فلاتر الأمان
+            rr_ratio = reward / reversal if reversal > 0 else 0
+            
+            # فلاتر الأمان المحسنة
+            safety_issues = []
+            
             if reversal > 30:
-                final_rec["reason"] = "انعكاس > 30 نقطة — إلغاء الصفقة."
-            elif n["RSI"] and (n["RSI"] < 40 or n["RSI"] > 70):
-                final_rec["reason"] = "RSI خارج النطاق (40-70) — إلغاء الصفقة."
-            elif n["MACD"] and n["MACD"] < -0.2:
-                final_rec["reason"] = "MACD سلبي قوي — إلغاء الصفقة."
+                safety_issues.append(f"انعكاس كبير ({reversal:.1f} نقطة)")
+            
+            if n["RSI"] and (n["RSI"] < 35 or n["RSI"] > 75):
+                safety_issues.append(f"RSI متطرف ({n['RSI']:.1f})")
+            
+            if n["MACD"] and n["MACD"] < -0.3:
+                safety_issues.append(f"MACD سلبي جداً ({n['MACD']:.3f})")
+            
+            if rr_ratio < 1.5:
+                safety_issues.append(f"نسبة مخاطرة/عائد ضعيفة ({rr_ratio:.2f})")
+            
+            if safety_issues:
+                final_rec["reason"] = f"إلغاء الصفقة: {' + '.join(safety_issues)}"
             else:
                 final_rec = {
-                    "direction": "شراء" if final_dir == "buy" else "بيع",
-                    "entry": str(entry),
-                    "tp": str(tp),
-                    "sl": str(sl),
-                    "reason": chosen.get("reason", "مطابقة مع إشارات SMC/ICT والكلاسيكي")
+                    "direction": "🟢 شراء" if final_direction == "buy" else "🔴 بيع",
+                    "entry": f"{entry:.2f}",
+                    "tp": f"{tp:.2f}",
+                    "sl": f"{sl:.2f}",
+                    "reason": f"{consensus_type} | المصدر: {chosen_source} | R:R = {rr_ratio:.2f}"
                 }
-    else:
-        final_rec["reason"] = "تعارض بين xAI و OpenAI — إلغاء الصفقة."
     
-    # بناء رسالة التوصية
-    recommendation_text = (
-        f"التوصية النهائية:\n"
-        f"- الصفقة: {final_rec['direction']}\n"
-        f"- الدخول: {final_rec['entry']}\n"
-        f"- جني الأرباح: {final_rec['tp']}\n"
-        f"- وقف الخسارة: {final_rec['sl']}\n"
-        f"- السبب: {final_rec['reason']}\n"
-        f"شرط: الانعكاس الأقصى ≤ 30 نقطة.\n"
-        f"الوقت: {now_str()}"
-    )
-    
-    # إرسال الرسائل
-    tgsend(msg_analysis)
-    await asyncio.sleep(0.3)
-    tgsend(recommendation_text)
+    # بناء رسالة التوصية النهائية
+    recommendation_text = f"""<b>🎯 التوصية النهائية</b>
 
-# =========[ ROUTES ]=========
+<b>الصفقة:</b> {final_rec['direction']}
+<b>الدخول:</b> {final_rec['entry']}
+<b>جني الأرباح:</b> {final_rec['tp']}
+<b>وقف الخسارة:</b> {final_rec['sl']}
+<b>السبب:</b> {final_rec['reason']}
+
+<b>⚡ شروط الأمان:</b>
+• الانعكاس الأقصى ≤ 30 نقطة
+• نسبة المخاطرة/العائد ≥ 1.5
+• RSI بين 35-75
+
+<b>🕐 الوقت:</b> {now_str()}"""
+    
+    # إرسال التوصية
+    tgsend(recommendation_text)
+    
+    print(f"[INFO] Alert processed successfully for {sym} {tf}")
+
+# ==================== API Routes ====================
 @app.get("/")
 def root():
-    """الصفحة الرئيسية - للتحقق من حالة الخدمة"""
-    return {"ok": True, "service": "shinzooh-final-v", "ts": now_str()}
+    """الصفحة الرئيسية - معلومات الخدمة"""
+    return {
+        "ok": True,
+        "service": "Shinzooh Trading Bot Enhanced",
+        "version": "2.0.0",
+        "ai_engines": {
+            "OpenAI": "✅" if OPENAI_API_KEY else "❌",
+            "xAI": "✅" if XAI_API_KEY else "❌", 
+            "Claude": "✅" if CLAUDE_API_KEY else "❌"
+        },
+        "features": [
+            "Triple AI Analysis",
+            "ICT/SMC Integration", 
+            "Advanced Risk Management",
+            "Telegram Notifications"
+        ],
+        "timestamp": now_str()
+    }
+
+@app.get("/health")
+def health_check():
+    """فحص صحة الخدمة"""
+    return {
+        "status": "healthy",
+        "ai_services": {
+            "openai": bool(OPENAI_API_KEY),
+            "xai": bool(XAI_API_KEY),
+            "claude": bool(CLAUDE_API_KEY)
+        },
+        "telegram": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+        "timestamp": now_str()
+    }
 
 @app.post("/webhook")
 async def webhook(request: Request):
     """استقبال التنبيهات من TradingView"""
-    raw = await request.body()
-    data = raw.decode(errors="ignore")
-    print(f"[INFO] Raw Body (KV): {data[:300]}")
-    
-    # معالجة التنبيه في الخلفية
-    asyncio.create_task(process_alert(data))
-    
-    return {"status": "ok"}
+    try:
+        raw = await request.body()
+        data = raw.decode(errors="ignore")
+        
+        print(f"[INFO] Webhook received: {data[:200]}...")
+        
+        # معالجة التنبيه في الخلفية
+        asyncio.create_task(process_alert(data))
+        
+        return {
+            "status": "success",
+            "message": "Alert received and processing",
+            "ai_engines": 3,
+            "timestamp": now_str()
+        }
+        
+    except Exception as e:
+        print(f"[ERROR] Webhook error: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": now_str()
+        }
 
+@app.post("/test")
+async def test_analysis(request: Request):
+    """اختبار التحليل - للتطوير فقط"""
+    try:
+        data = await request.json()
+        test_data = f"SYMB={data.get('symbol', 'XAUUSD')},TF={data.get('timeframe', '5m')},C={data.get('close', 2650)},RSI={data.get('rsi', 50)},EMA={data.get('ema', 2645)}"
+        
+        asyncio.create_task(process_alert(test_data))
+        
+        return {"status": "test_sent", "data": test_data}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# ==================== تشغيل التطبيق ====================
 if __name__ == "__main__":
     import uvicorn
+    print("🚀 Starting Shinzooh Trading Bot Enhanced v2.0")
+    print(f"🤖 AI Engines: OpenAI({'✅' if OPENAI_API_KEY else '❌'}) | xAI({'✅' if XAI_API_KEY else '❌'}) | Claude({'✅' if CLAUDE_API_KEY else '❌'})")
+    print(f"📱 Telegram: {'✅' if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID else '❌'}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 

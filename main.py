@@ -12,8 +12,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 PORT = int(os.getenv("PORT", "10000"))
 
-# --- إعداد استراتيجية إعادة المحاولة للاتصالات ---
-# تم استخدام allowed_methods بدلاً من method_whitelist لتوافق مع الإصدار الجديد
+# --- إعداد استراتيجية إعادة المحاولة للاتصالات (متوافقة مع الإصدارات الحديثة) ---
 retry_strategy = Retry(
     total=3,
     backoff_factor=1,
@@ -33,15 +32,12 @@ def now_str():
 
 def _to_float_safe(s):
     """تحويل النص إلى عدد عشري بأمان، مع تجاهل القيم غير الصالحة."""
-    if s is None:
-        return None
+    if s is None: return None
     s = str(s).strip()
-    if s in ("", "NaN", "nan", "null", "None", "{", "}", "{{rsi}}"):
-        return None
+    if s in ("", "NaN", "nan", "null", "None", "{", "}", "{{rsi}}"): return None
     try:
         return float(s)
     except (ValueError, TypeError):
-        # محاولة تنظيف النص من أي رموز غير رقمية وإعادة المحاولة
         s2 = re.sub(r"[^0-9\.\-\+eE]", "", s)
         try:
             return float(s2)
@@ -52,22 +48,19 @@ def parse_kv(raw: str) -> dict:
     """تحليل النص القادم من الإشارة (Alert) وتحويله إلى قاموس."""
     d = {}
     for part in raw.split(","):
-        if "=" not in part:
-            continue
+        if "=" not in part: continue
         k, v = part.split("=", 1)
         d[k.strip()] = v.strip()
     return d
 
 def build_prompt_ar(n: dict) -> str:
-    """بناء موجه الأوامر (Prompt) الديناميكي باللغة العربية لإرساله لنماذج الذكاء الاصطناعي."""
-    # استخلاص البيانات مع قيم افتراضية
-    sym, tf = n.get("SYMB",""), n.get("TF","")
-    O,H,L,C,V = n.get("O"),n.get("H"),n.get("L"),n.get("C"),n.get("V")
-    RSI,EMA,MACD = n.get("RSI"),n.get("EMA"),n.get("MACD")
-    bull_ce, bear_ce = n.get("BULL_FVG_CE"), n.get("BEAR_FVG_CE")
+    """بناء موجه الأوامر (Prompt) الديناميكي لإرساله لنماذج الذكاء الاصطناعي."""
+    sym, tf, C = n.get("SYMB",""), n.get("TF",""), n.get("C")
+    O, H, L, V = n.get("O"), n.get("H"), n.get("L"), n.get("V")
+    RSI, EMA, MACD = n.get("RSI"), n.get("EMA"), n.get("MACD")
     csd_up, csd_dn = n.get("CSD_UP"), n.get("CSD_DN")
+    bull_ce, bear_ce = n.get("BULL_FVG_CE"), n.get("BEAR_FVG_CE")
     
-    # قالب السؤال المفصل
     return (
 f"""حلّل زوج {sym} على فريم {tf} بأسلوب ICT/SMC بدقة عالية:
 - المستويات: Liquidity / BOS / CHoCH / FVG / Order Block / Premium-Discount
@@ -82,78 +75,57 @@ f"""حلّل زوج {sym} على فريم {tf} بأسلوب ICT/SMC بدقة ع�
 * RSI: {RSI if RSI else 'na'}
 * EMA20: {EMA if EMA else 'na'}
 * MACD: {MACD if MACD else 'na'}
-📌 التفسير: ...
+📌 التفسير: [يُملأ بواسطة AI]
 📚 تحليل ICT / SMC
 * CSD_UP: {csd_up if csd_up else 'na'}
 * CSD_DN: {csd_dn if csd_dn else 'na'}
-* BOS / CHoCH: ...
-* FVG / OB: ...
-* السيولة: ...
-📌 التفسير: ...
-🤖 ملخص النماذج
-| النموذج | القرار | السبب |
-|---------|---------|-------|
-| OpenAI  |         |       |
-| xAI     |         |       |
-| Claude  |         |       |
-⚠️ سبب التعارض
-📌 النتيجة: ...
+* BOS / CHoCH: [يُملأ بواسطة AI]
+* FVG / OB: [يُملأ بواسطة AI]
+* السيولة: [يُملأ بواسطة AI]
+📌 التفسير: [يُملأ بواسطة AI]
 🎯 التوصية النهائية
 * نوع الصفقة: ...
 * نقاط الدخول: ...
 * TP1 / TP2 / TP3 / TP4: ...
 * وقف الخسارة: ...
 * السبب: ...
-⚡ شروط الأمان
-* أقصى انعكاس: ≤ 30 نقطة
-* نسبة العائد إلى المخاطرة: ≥ 1.5
-* RSI بين 35 و75
-🕒 الوقت: {now_str()}
-⏱️ الفريم: {tf}
-📉 الرمز: {sym}
-التزم بالتنسيق حرفيًا، أرقام صريحة بدون زخرفة."""
+"""
     )
 
 # --- دوال الاتصال بنماذج الذكاء الاصطناعي ---
 
-def ask_xai(prompt: str, timeout=22):
-    """إرسال الطلب إلى xAI (Grok) والحصول على الرد."""
-    if not XAI_API_KEY:
-        return False, "xAI API key missing"
+def ask_ai_model(session, url, headers, json_payload, timeout=22):
+    """دالة موحدة لإرسال الطلبات لنماذج الذكاء الاصطناعي."""
     try:
-        r = session.post(
-            "https://api.x.ai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"},
-            json={"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1000},
-            timeout=timeout
-         )
+        r = session.post(url, headers=headers, json=json_payload, timeout=timeout)
         r.raise_for_status()
         return True, r.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        return False, f"xAI error: {e}"
+        return False, f"API error: {e}"
 
-def ask_openai(prompt: str, timeout=22):
-    """إرسال الطلب إلى OpenAI (GPT) والحصول على الرد."""
-    if not OPENAI_API_KEY:
-        return False, "OpenAI API key missing"
-    try:
-        r = session.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
-            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1000},
-            timeout=timeout
-         )
-        r.raise_for_status()
-        return True, r.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        return False, f"OpenAI error: {e}"
+def ask_xai(prompt: str):
+    if not XAI_API_KEY: return False, "xAI API key missing"
+    return ask_ai_model(
+        session,
+        "https://api.x.ai/v1/chat/completions",
+        {"Authorization": f"Bearer {XAI_API_KEY}", "Content-Type": "application/json"},
+        {"model": "grok-4-latest", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1000}
+     )
+
+def ask_openai(prompt: str):
+    if not OPENAI_API_KEY: return False, "OpenAI API key missing"
+    return ask_ai_model(
+        session,
+        "https://api.openai.com/v1/chat/completions",
+        {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+        {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 1000}
+     )
 
 # --- دوال تحليل النتائج والمنطق ---
 
 def extract_trade_fields(text: str) -> dict:
     """استخلاص تفاصيل الصفقة من النص الخام القادم من نماذج الذكاء الاصطناعي."""
-    if not text:
-        return {}
+    if not text: return {}
     def grab(pattern):
         m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
         return m.group(1).strip() if m else ""
@@ -163,7 +135,9 @@ def extract_trade_fields(text: str) -> dict:
         "entry": grab(r"نقاط الدخول\s*:\s*(.*)"),
         "tps": grab(r"TP1\s*\/\s*TP2\s*\/\s*TP3\s*\/\s*TP4\s*:\s*(.*)"),
         "sl": grab(r"وقف الخسارة\s*:\s*(.*)"),
-        "reason": grab(r"السبب\s*:\s*(.*)")
+        "reason": grab(r"السبب\s*:\s*(.*)"),
+        "classic_analysis": grab(r"التحليل الفني الكلاسيكي\s*\n(.*?)📚"),
+        "smc_analysis": grab(r"تحليل ICT / SMC\s*\n(.*?)🎯")
     }
 
 def consensus(rec_a: dict, rec_b: dict) -> tuple:
@@ -177,14 +151,9 @@ def consensus(rec_a: dict, rec_b: dict) -> tuple:
     da = norm_dir(rec_a.get("direction", ""))
     db = norm_dir(rec_b.get("direction", ""))
 
-    if da and da == db:
-        return True, da, rec_a # إذا اتفقا، نعتمد توصية الأول
-    if da and not db:
-        return True, da, rec_a # إذا كان الأول فقط لديه توصية
-    if db and not da:
-        return True, db, rec_b # إذا كان الثاني فقط لديه توصية
-    
-    # في حالة الاختلاف أو عدم وجود توصيات
+    if da and da == db: return True, da, rec_a
+    if da and not db: return True, da, rec_a
+    if db and not da: return True, db, rec_b
     return False, "", {}
 
 # --- دالة إرسال الرسالة إلى تليجرام ---
@@ -196,7 +165,6 @@ def tgsend(text: str):
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        # استخدام parse_mode لتفعيل تنسيق Markdown في الرسالة
         session.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=12 )
     except Exception as e:
         print(f"[WARN] Telegram send error: {e}")
@@ -204,17 +172,17 @@ def tgsend(text: str):
 # --- المنطق الرئيسي لمعالجة الإشارات ---
 
 _last_send = {}
-MIN_GAP_SEC = 5 # منع إرسال إشارات متكررة لنفس الزوج خلال 5 ثوان
+MIN_GAP_SEC = 5
 
 async def process_alert(raw_text: str):
     """الدالة الرئيسية التي تربط كل العمليات معًا."""
     kv = parse_kv(raw_text)
     n = {
         "SYMB": kv.get("SYMB",""), "TF": kv.get("TF",""),
-        "O": _to_float_safe(kv.get("O") or kv.get("OPEN")), "H": _to_float_safe(kv.get("H") or kv.get("HIGH")),
-        "L": _to_float_safe(kv.get("L") or kv.get("LOW")), "C": _to_float_safe(kv.get("C") or kv.get("CLOSE")),
-        "V": _to_float_safe(kv.get("V") or kv.get("VOLUME")), "RSI": _to_float_safe(kv.get("RSI")),
-        "EMA": _to_float_safe(kv.get("EMA") or kv.get("MA")), "MACD": _to_float_safe(kv.get("MACD")),
+        "O": _to_float_safe(kv.get("O")), "H": _to_float_safe(kv.get("H")),
+        "L": _to_float_safe(kv.get("L")), "C": _to_float_safe(kv.get("C")),
+        "V": _to_float_safe(kv.get("V")), "RSI": _to_float_safe(kv.get("RSI")),
+        "EMA": _to_float_safe(kv.get("EMA")), "MACD": _to_float_safe(kv.get("MACD")),
         "CSD_UP": _to_float_safe(kv.get("CSD_UP")), "CSD_DN": _to_float_safe(kv.get("CSD_DN")),
         "BULL_FVG_CE": _to_float_safe(kv.get("BULL_FVG_CE")), "BEAR_FVG_CE": _to_float_safe(kv.get("BEAR_FVG_CE")),
     }
@@ -223,7 +191,6 @@ async def process_alert(raw_text: str):
     key = f"{sym}|{tf}"
     now_sec = time.time()
 
-    # فلترة الإشارات المتكررة والبيانات الأساسية الناقصة
     if key in _last_send and (now_sec - _last_send[key]) < MIN_GAP_SEC:
         print(f"[INFO] Skip duplicate burst for {key}.")
         return
@@ -232,12 +199,10 @@ async def process_alert(raw_text: str):
         print("[INFO] Missing essentials (SYMB, TF, C), skip.")
         return
     
-    # فلترة حسب شروط الأمان الأولية
     if n["RSI"] and not (35 <= n["RSI"] <= 75):
         print(f"[INFO] RSI {n['RSI']} out of range (35-75), skip.")
         return
 
-    # بناء وتنفيذ الطلبات لنماذج الذكاء الاصطناعي
     prompt = build_prompt_ar(n)
     loop = asyncio.get_event_loop()
     ok_xai, txt_xai = await loop.run_in_executor(None, lambda: ask_xai(prompt))
@@ -246,43 +211,26 @@ async def process_alert(raw_text: str):
     rec_xai = extract_trade_fields(txt_xai if ok_xai else "")
     rec_oai = extract_trade_fields(txt_oai if ok_oai else "")
     
-    # المقارنة بين النتائج
     agreed, final_dir, final_rec = consensus(rec_xai, rec_oai)
     
-    # تجهيز قرارات النماذج للعرض في الجدول
     openai_decision = "✅ شراء" if "buy" in rec_oai.get("direction", "").lower() else "❌ بيع" if "sell" in rec_oai.get("direction", "").lower() else "⚠️ محايد"
-    openai_reason = rec_oai.get("reason", "لا يوجد سبب واضح") or "لا يوجد سبب واضح"
     xai_decision = "✅ شراء" if "buy" in rec_xai.get("direction", "").lower() else "❌ بيع" if "sell" in rec_xai.get("direction", "").lower() else "⚠️ محايد"
-    xai_reason = rec_xai.get("reason", "لا يوجد سبب واضح") or "لا يوجد سبب واضح"
-    claude_decision, claude_reason = "⚠️ محايد", "لم يتم الربط"
-
-    # بناء الرسالة النهائية للتليجرام
+    
     message = f"""*تحليل {sym} | {tf}*
 *التوقيت: {now_str()}*
 ---
-*🔍 التحليل الفني الكلاسيكي*
-- *السعر الحالي:* `{n['C'] or 'na'}`
-- *البيانات:* O=`{n['O'] or 'na'}` H=`{n['H'] or 'na'}` L=`{n['L'] or 'na'}` C=`{n['C'] or 'na'}`
-- *RSI:* `{n['RSI'] or 'na'}` | *EMA20:* `{n['EMA'] or 'na'}` | *MACD:* `{n['MACD'] or 'na'}`
-- *التفسير:* السعر يتداول بشكل متقلب. المؤشرات الفنية لا تعطي إشارة قوية في اتجاه معين.
-
-*📚 تحليل ICT / SMC*
-- *CSD:* UP=`{n['CSD_UP'] or 'na'}`, DN=`{n['CSD_DN'] or 'na'}`
-- *BOS/CHoCH:* لا يوجد كسر هيكلي واضح.
-- *FVG/OB:* `{'فجوة صاعدة' if n['BULL_FVG_CE'] else 'فجوة هابطة' if n['BEAR_FVG_CE'] else 'لا توجد فجوات سعرية'}`
-- *السيولة:* يتم استهداف مناطق السيولة القريبة.
-- *التفسير:* السوق يظهر علامات تجميع، مع وجود فجوات سعرية قد يعمل السعر على ملئها.
-
+{rec_oai.get('classic_analysis', '*🔍 التحليل الفني الكلاسيكي*').strip()}
+{rec_oai.get('smc_analysis', '*📚 تحليل ICT / SMC*').strip()}
+---
 *🤖 ملخص النماذج*
-| النموذج | القرار | السبب |
-|:---|:---|:---|
-| OpenAI | {openai_decision} | {openai_reason} |
-| xAI | {xai_decision} | {xai_reason} |
-| Claude | {claude_decision} | {claude_reason} |
+| النموذج | القرار |
+|:---|:---|
+| OpenAI | {openai_decision} |
+| xAI | {xai_decision} |
+| Claude | ⚠️ محايد (لم يتم الربط) |
 
 *⚠️ تحليل التوافق*
 - *النتيجة:* `{'✅ توافق على ' + final_dir.upper() if agreed else '❌ تعارض بين النماذج.'}`
-- *السبب:* `{'تم الاتفاق بين النموذجين.' if agreed else 'كل نموذج يرى السوق من زاوية مختلفة.'}`
 
 *🎯 التوصية النهائية*
 - *نوع الصفقة:* `{final_rec.get('direction', 'لا يوجد') if agreed else 'لا يوجد'}`
@@ -305,11 +253,10 @@ def root():
 
 @app.post("/webhook")
 async def webhook(request: Request):
-    """نقطة استقبال الإشارات (Alerts) من TradingView أو غيره."""
+    """نقطة استقبال الإشارات (Alerts)."""
     raw = await request.body()
     data = raw.decode(errors="ignore")
     print(f"[INFO] Raw Body (KV): {data[:300]}")
-    # تشغيل المعالجة في الخلفية لعدم حجب الاستجابة
     asyncio.create_task(process_alert(data))
     return {"status": "ok"}
 

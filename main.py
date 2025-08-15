@@ -193,19 +193,6 @@ async def process_alert(raw_text: str):
     if not sym or not tf or n["C"] is None:
         print("[INFO] Missing essentials, skip.")
         return
-    # فلترة متقدمة لدقة 10000%
-    if n["RSI"] and (n["RSI"] < 40 or n["RSI"] > 70):
-        print("[INFO] RSI out of range (40-70), skip.")
-        return
-    if n["MACD"] and n["MACD"] < -0.2:
-        print("[INFO] MACD negative, skip.")
-        return
-    if n["BULL_FVG_CE"] and n["BEAR_FVG_CE"] and abs(n["BULL_FVG_CE"] - n["C"]) < 0.1 and abs(n["BEAR_FVG_CE"] - n["C"]) < 0.1:
-        print("[INFO] Conflicting FVG, skip.")
-        return
-    if n["CSD_UP"] and n["CSD_DN"] and abs(n["CSD_UP"] - n["CSD_DN"]) > 1:
-        print("[INFO] CSD imbalance, skip.")
-        return
     prompt = build_prompt_ar(n)
     loop = asyncio.get_event_loop()
     ok_xai, txt_xai = await loop.run_in_executor(None, ask_xai, prompt)

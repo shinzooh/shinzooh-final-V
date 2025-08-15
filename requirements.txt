@@ -1,6 +1,6 @@
-fastapi==0.116.1
-uvicorn==0.35.0
-requests==2.32.4
-urllib3==2.5.0
-gunicorn==23.0.0
-pydantic==2.9.2  # تحديث إلى v2 لضمان التوافق
+fastapi==0.104.1
+uvicorn==0.23.2
+requests==2.31.0
+urllib3==2.2.1
+pydantic==1.10.13
+gunicorn==22.0.0

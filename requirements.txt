@@ -1,7 +1,6 @@
 fastapi
 uvicorn
-gunicorn
-python-telegram-bot==13.15
 requests
-pydantic==1.10
 urllib3
+gunicorn
+pydantic==2.8.0  # تحديث إلى v2 لتوافق Python 3.13

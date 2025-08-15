@@ -265,18 +265,4 @@ async def process_alert(raw_text: str):
     tgsend(recommendation_text)
 
 # =========[ ROUTES ]=========
-@app.get("/")
-def root():
-    return {"ok": True, "service": "shinzooh-final-v", "ts": now_str()}
-
-@app.post("/webhook")
-async def webhook(request: Request):
-    raw = await request.body()
-    data = raw.decode(errors="ignore")
-    print(f"[INFO] Raw Body (KV): {data[:300]}")
-    asyncio.create_task(process_alert(data))
-    return {"status": "ok"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+@app.get
